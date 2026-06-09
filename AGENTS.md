@@ -65,7 +65,7 @@ All 5 can run simultaneously at full speed without blocking each other.
 |----------|------|
 | `xnxx.com/search/best` | 50-100 video links (`/video-{id}/{slug}`) |
 | `xnxx.com/video-{id}/{slug}` | JSON-LD: name, duration, views, contentUrl |
-| `mp4-{cdn}.xnxx-cdn.com/{uuid}/0/video_{q}p.mp4?secure={token},{expiry}` | Direct MP4 — **each quality has its OWN token** |
+| `mp4-{cdn}.xnxx-cdn.com/{uuid}/{n}/video_{q}p.mp4` or `/{n}/mp4_{sd\|hq\|hd\|fhd}.mp4` `?secure={token},{expiry}` | Direct MP4 — **each quality has its OWN token**; filename format changed mid-2026 to `mp4_{label}.mp4`, path digit varies |
 | `hls-cdn77.xnxx-cdn.com/{token},{expiry}/{uuid}/0/hls.m3u8` | HLS stream (own token) |
 | `thumb-cdn77.xnxx-cdn.com/{uuid}/0/preview.mp4` | 10s preview (used for hover) |
 

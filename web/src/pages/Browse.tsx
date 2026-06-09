@@ -215,43 +215,43 @@ export default function Browse() {
     <>
       {label && <div className="px-3 py-1 text-xs text-muted md:px-6">{label}</div>}
 
-      <div className="flex items-center gap-1.5 px-2.5 py-2 md:px-6 flex-wrap">
-        <span className="text-[11px] font-semibold text-muted uppercase tracking-widest mr-1">Sort</span>
+      <div className="flex items-center gap-1.5 px-2.5 py-2.5 md:px-6 flex-wrap">
+        <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mr-1">Sort</span>
         {sorts.map(s => (
           <Link
             key={s.value}
             to={sortHref(s.value)}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
                         ${sort === s.value
-                          ? 'bg-orange text-black'
-                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10'
+                          ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
+                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
                         }`}
           >
             {s.label}
           </Link>
         ))}
-        <span className="text-[11px] font-semibold text-muted uppercase tracking-widest mx-2">|</span>
+        <span className="w-px h-4 bg-white/10 mx-2" aria-hidden />
         {sources.map(s => (
           <Link
             key={s.value}
             to={sourceHref(s.value)}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
                         ${sourceFilter === s.value
-                          ? 'bg-orange text-black'
-                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10'
+                          ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
+                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
                         }`}
           >
             {s.label}
           </Link>
         ))}
-        <span className="text-[11px] font-semibold text-muted uppercase tracking-widest mx-2">|</span>
+        <span className="w-px h-4 bg-white/10 mx-2" aria-hidden />
         {[
           { key: 'compact', icon: '\u25A6' },
           { key: 'comfortable', icon: '\u25A3' },
           { key: 'large', icon: '\u25A1' },
         ].map(d => (
           <button key={d.key} onClick={() => { setDensity(d.key as any); localStorage.setItem('kxxx_density', d.key) }}
-            className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${density === d.key ? 'bg-orange text-black' : 'text-muted hover:text-text'}`}>
+            className={`px-2 py-1 rounded-md text-xs font-semibold transition-all duration-150 ${density === d.key ? 'bg-white/10 text-orange shadow-inner' : 'text-muted hover:text-text hover:bg-white/5'}`}>
             {d.icon}
           </button>
         ))}
@@ -260,11 +260,11 @@ export default function Browse() {
       {token && (
         <div className="flex items-center gap-2 px-2.5 md:px-6 py-1">
           <button onClick={() => setActiveTab('browse')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${activeTab === 'browse' ? 'bg-orange text-black' : 'text-muted hover:text-text'}`}>
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${activeTab === 'browse' ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]' : 'text-muted hover:text-text hover:bg-white/5'}`}>
             Browse
           </button>
           <button onClick={() => setActiveTab('for-you')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${activeTab === 'for-you' ? 'bg-orange text-black' : 'text-muted hover:text-text'}`}>
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${activeTab === 'for-you' ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]' : 'text-muted hover:text-text hover:bg-white/5'}`}>
             For You
           </button>
         </div>

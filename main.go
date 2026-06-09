@@ -2566,7 +2566,7 @@ func scrapeXnxxTagPage(query string) []Video {
 var (
 	reVideoLink  = regexp.MustCompile(`<a[^>]*href="/video-([a-z0-9]+)/([^"]+)"`)
 	reJSONLD     = regexp.MustCompile(`<script[^>]*type="application/ld\+json"[^>]*>\s*(\{[\s\S]*?\})\s*</script>`)
-	reHLSSource  = regexp.MustCompile(`https://hls-cdn77\.xnxx-cdn\.com/([^"'\s]+,\d+)/([a-f0-9-]+)/0/hls\.m3u8`)
+	reHLSSource  = regexp.MustCompile(`https://hls-cdn77\.xnxx-cdn\.com/([^"'\s]+,\d+)/([a-f0-9-]+)/\d+/hls\.m3u8`)
 	reThumbUUID  = regexp.MustCompile(`/([a-f0-9-]+)/\d+/(?:xn_\d+_t|preview)`)
 	reVidScript  = regexp.MustCompile(`video_url[^=]*=\s*'([^']+)'`) // JS variable fallback
 
@@ -2576,7 +2576,8 @@ var (
 	reSetUrlHigh = regexp.MustCompile(`setVideoUrlHigh\(\s*['"]([^'"]+)['"]`)
 	reSetUrlLow  = regexp.MustCompile(`setVideoUrlLow\(\s*['"]([^'"]+)['"]`)
 	reSetHLS     = regexp.MustCompile(`setVideoHLS\(\s*['"]([^'"]+)['"]`)
-	reMP4Any     = regexp.MustCompile(`https://mp4-[^.]+\.xnxx-cdn\.com/([a-f0-9-]+)/\d+/video_(\d+)p\.mp4\?secure=([^"'\s\\]+)`)
+	// Two filename generations: legacy video_{res}p.mp4 and 2026+ mp4_{label}.mp4 (sd/hq/hd/fhd)
+	reMP4Any     = regexp.MustCompile(`https://mp4-[^.]+\.xnxx-cdn\.com/([a-f0-9-]+)/\d+/(?:video_(\d+)p|mp4_([a-z0-9]+))\.mp4\?secure=([^"'\s\\]+)`)
 )
 
 // assignMP4Quality stores a real player MP4 URL (with its own token) into the
@@ -2585,11 +2586,22 @@ var (
 // from whichever URL is parsed. Returns true if the URL was a usable xnxx MP4.
 func assignMP4Quality(v *Video, rawURL string) bool {
 	m := reMP4Any.FindStringSubmatch(rawURL)
-	if len(m) < 4 {
+	if len(m) < 5 {
 		return false
 	}
-	uuid, token := m[1], m[3]
+	uuid, token := m[1], m[4]
 	res, _ := strconv.Atoi(m[2])
+	if res == 0 && m[3] != "" {
+		// New-format label → resolution bucket
+		switch m[3] {
+		case "ld", "sd":
+			res = 360
+		case "hq", "hd":
+			res = 720
+		default: // fhd, uhd, anything newer
+			res = 1080
+		}
+	}
 
 	if v.ThumbUUID == "" {
 		v.ThumbUUID = uuid

@@ -122,7 +122,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
   const sidebar = (
     <aside className="w-56 flex-shrink-0 h-[calc(100vh-3.5rem)] overflow-y-auto
-                       bg-card border-r border-border flex flex-col
+                       bg-card/50 backdrop-blur-sm border-r border-white/5 flex flex-col
                        scrollbar-thin">
       {/* Sort filters */}
       <div className="p-3 pb-2">

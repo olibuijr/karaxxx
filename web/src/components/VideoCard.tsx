@@ -46,8 +46,10 @@ export default function VideoCard({ video }: { video: Video }) {
       to={`/play/${video.id}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      className="group flex flex-col overflow-hidden rounded-lg bg-card border border-border
-                 hover:border-red/40 hover:-translate-y-1 hover:shadow-xl hover:shadow-black/30
+      className="group flex flex-col overflow-hidden rounded-xl bg-card border border-white/[0.06]
+                 shadow-[0_1px_2px_rgba(0,0,0,0.4),0_8px_24px_-12px_rgba(0,0,0,0.5)]
+                 hover:border-orange/30 hover:-translate-y-1
+                 hover:shadow-[0_0_0_1px_rgba(249,115,22,0.15),0_12px_40px_-8px_rgba(0,0,0,0.7)]
                  active:scale-[0.975] transition-all duration-200"
     >
       <div className="relative aspect-video bg-bg overflow-hidden flex-shrink-0">
@@ -64,7 +66,12 @@ export default function VideoCard({ video }: { video: Video }) {
           </>
         )}
         {progressPct > 0 && (
-          <div className="absolute bottom-0 h-[3px] bg-orange z-10" style={{ width: `${progressPct}%` }} />
+          <>
+            <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/10 z-10" />
+            <div className="absolute bottom-0 h-[3px] bg-gradient-to-r from-red to-orange z-10
+                            shadow-[0_0_6px_rgba(249,115,22,0.6)]"
+                 style={{ width: `${progressPct}%` }} />
+          </>
         )}
         {preview && (
           <video
@@ -79,9 +86,10 @@ export default function VideoCard({ video }: { video: Video }) {
           />
         )}
         {video.duration > 0 && (
-          <span className="absolute bottom-2 right-2 bg-bg/70 backdrop-blur-sm
-                           text-white text-[10px] px-1.5 py-0.5 rounded-full
-                           font-semibold tracking-wide border border-white/10 z-10">
+          <span className="absolute bottom-2 right-2 bg-black/65 backdrop-blur-md
+                           text-white text-[10px] px-2 py-0.5 rounded-md
+                           font-semibold tabular-nums tracking-wide border border-white/10 z-10
+                           shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
             {formatDuration(video.duration)}
           </span>
         )}
