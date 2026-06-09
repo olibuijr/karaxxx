@@ -1,0 +1,40 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-bg: #22222a;
+  --color-card: #2a2a35;
+  --color-border: #2a2a3e;
+  --color-text: #ffffff;
+  --color-muted: #a1a1aa;
+  --color-red: #e50914;
+  --color-orange: #f97316;
+  --radius: 0.625rem;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+html {
+  font-size: 120%;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+video[data-preview].playing {
+  opacity: 1;
+}
+
+@keyframes slideRight {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}

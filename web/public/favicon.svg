@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a2a35"/>
+      <stop offset="100%" stop-color="#1a1a22"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- Play triangle: orange, bold, readable at any size -->
+  <path d="M185 130 L185 382 L390 256 Z" fill="#f97316"/>
+  <!-- K outline within/over play button for larger sizes -->
+  <path d="M245 200 L295 256 L245 312 M295 256 L295 312 M295 256 L305 200" 
+        stroke="#1a1a22" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.6"/>
+</svg>

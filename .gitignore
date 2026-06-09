@@ -1,0 +1,8 @@
+/karaxxx
+/karaxxx.db
+/karaxxx.db.*
+/test_deadlock.db
+web/dist/
+web/node_modules/
+*.lock
+.env
