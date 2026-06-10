@@ -1389,7 +1389,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 			ftsArgs := []interface{}{sanitized}
 			ftsArgs = append(ftsArgs, args...)
 			rows, err := db.Query(
-				`SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source
+				`SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx')
 				 FROM videos_fts f JOIN videos v ON v.rowid = f.rowid`+ftsWhere+` ORDER BY rank LIMIT ? OFFSET ?`,
 				append(ftsArgs, perPage, (page-1)*perPage)...)
 			if err == nil {
@@ -1412,7 +1412,9 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		query := `SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v` + where + ` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
+		// COALESCE everything nullable: stub rows (tnaflix/drtuber) leave columns
+		// NULL, and a NULL aborts rows.Scan mid-row → blank cards in the UI.
+		query := `SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx') FROM videos v` + where + ` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
 		rows, err := db.Query(query, append(args, perPage, (page-1)*perPage)...)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -1879,6 +1881,9 @@ func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 
 	cached, newCount := 0, 0
 	for _, v := range videos {
+		if !isValidXnxxID(v.ID) {
+			continue
+		}
 		var exists string
 		db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
 		if exists != "" {
@@ -1997,6 +2002,9 @@ func runFullCrawl() {
 
 		// Insert stubs for this page immediately so UI updates in realtime
 		for _, v := range batch {
+			if !isValidXnxxID(v.ID) {
+				continue
+			}
 			var exists string
 			db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
 			if exists != "" {
@@ -2279,6 +2287,9 @@ func processSitemaps() {
 	// Insert sitemap videos as stubs
 	var newIDs []string
 	for _, vid := range sitemapVIDs {
+		if !isValidXnxxID(vid) {
+			continue
+		}
 		var exists string
 		db.QueryRow("SELECT id FROM videos WHERE id = ?", vid).Scan(&exists)
 		if exists != "" {
@@ -2471,6 +2482,9 @@ func processPornstars() {
 func insertVideoStubs(videos []Video) []string {
 	var ids []string
 	for _, v := range videos {
+		if !isValidXnxxID(v.ID) {
+			continue
+		}
 		var exists string
 		db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
 		if exists != "" {
@@ -2700,8 +2714,19 @@ func scrapeXnxxSearch(query string) []Video {
 	return videos
 }
 
+// Real xnxx IDs are lowercase base36 (e.g. 1hl7wj6d). Mixed-case IDs are
+// premium/gold teaser links that 404 or redirect off-site — never ingest them.
+var reValidXnxxID = regexp.MustCompile(`^[a-z0-9]{5,12}$`)
+
+func isValidXnxxID(id string) bool {
+	return reValidXnxxID.MatchString(id)
+}
+
 func scrapeVideoDetail(id string) (Video, error) {
 	v := Video{ID: id}
+	if !isValidXnxxID(id) {
+		return v, fmt.Errorf("invalid xnxx id %q", id)
+	}
 
 	slug := ""
 	db.QueryRow("SELECT slug FROM videos WHERE id = ?", id).Scan(&slug)
@@ -2715,6 +2740,11 @@ func scrapeVideoDetail(id string) (Video, error) {
 		return v, err
 	}
 	defer resp.Body.Close()
+
+	// Premium teasers redirect to xnxx.gold — no player data there, only upsell.
+	if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Host != "www.xnxx.com" {
+		return v, fmt.Errorf("redirected off-site to %s", resp.Request.URL.Host)
+	}
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	html := string(body)
@@ -2855,7 +2885,10 @@ func scrapeVideoDetail(id string) (Video, error) {
 	}
 
 	if v.Title == "" {
-		v.Title = slugToTitle(id)
+		// No JSON-LD and no og:title means this isn't a playable video page
+		// (gold teaser, removed video, layout change). Storing it would create
+		// a blank card whose title is the raw ID — fail instead.
+		return v, fmt.Errorf("no title extracted for %s — not a playable video page", id)
 	}
 	v.AddedAt = time.Now().Format("2006-01-02")
 	v.Source = "xnxx"
@@ -2879,8 +2912,18 @@ func storeVideo(v Video) {
 	}
 	cats := strings.Join(extractCategories(v.Title, v.Description, v.Tags), ",")
 	tagsStr := strings.Join(v.Tags, ",")
-	_, err := db.Exec(`INSERT OR REPLACE INTO videos (id, slug, title, description, categories, tags, uploader, upload_date, duration, views, added_at, source, thumb_uuid, url_360, url_720, url_1080, preview_url, hls_url, secure_token, expires_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	// On re-scrape keep the original added_at — refreshes must not push old
+	// videos back to the top of the Recent feed.
+	_, err := db.Exec(`INSERT INTO videos (id, slug, title, description, categories, tags, uploader, upload_date, duration, views, added_at, source, thumb_uuid, url_360, url_720, url_1080, preview_url, hls_url, secure_token, expires_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			slug=excluded.slug, title=excluded.title, description=excluded.description,
+			categories=excluded.categories, tags=excluded.tags, uploader=excluded.uploader,
+			upload_date=excluded.upload_date, duration=excluded.duration, views=excluded.views,
+			source=excluded.source, thumb_uuid=excluded.thumb_uuid,
+			url_360=excluded.url_360, url_720=excluded.url_720, url_1080=excluded.url_1080,
+			preview_url=excluded.preview_url, hls_url=excluded.hls_url,
+			secure_token=excluded.secure_token, expires_at=excluded.expires_at`,
 		v.ID, v.Slug, v.Title, v.Description, cats, tagsStr, v.Uploader, v.UploadDate,
 		v.Duration, v.Views, v.AddedAt, v.Source,
 		v.ThumbUUID, v.URL360, v.URL720, v.URL1080, v.PreviewURL, v.HLSURL,
