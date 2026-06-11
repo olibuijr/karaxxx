@@ -16,7 +16,6 @@ const dtBase = "https://www.drtuber.com"
 
 var (
 	reDtVideoLink  = regexp.MustCompile(`<a[^>]*href="/video/(\d+)/([^"]+)"[^>]*class="th ch-video[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>`)
-	reDtTimeThumb  = regexp.MustCompile(`<em[^>]*class="time_thumb"[^>]*>\s*<em>(\d+:\d+)</em>\s*</em>`)
 	reDtMetaDesc   = regexp.MustCompile(`<meta name="description" content="([^"]*)"`)
 	reDtTags       = regexp.MustCompile(`<a[^>]*href="/tags/[^"]*"[^>]*>([^<]+)</a>`)
 	reDtCatLinks   = regexp.MustCompile(`<a[^>]*href="/categories/[^"]*"[^>]*>([^<]+)</a>`)
@@ -93,10 +92,6 @@ func scrapeDtListing(pageURL string) []Video {
 			ThumbUUID: m[3],
 			Source:    "drtuber",
 			AddedAt:   time.Now().Format("2006-01-02"),
-		}
-
-		if durMatch := reDtTimeThumb.FindStringSubmatch(bodyStr); len(durMatch) > 1 {
-			v.Duration = parseEpDuration(durMatch[1])
 		}
 
 		videos = append(videos, v)
@@ -232,6 +227,7 @@ func runDtCrawl() {
 				detail, err := scrapeDtVideoDetail(v.ID)
 				if err != nil {
 					log.Printf("DrTuber detail scrape %s failed: %v", v.ID, err)
+					storeVideo(v)
 					continue
 				}
 				storeVideo(detail)

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import AuthDialog from './AuthDialog'
@@ -10,6 +10,7 @@ import {
 } from './ui/dropdown-menu'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import BrandLogo from './BrandLogo'
+import SearchDropdown from './SearchDropdown'
 
 interface Props {
   videoCount?: number
@@ -18,17 +19,11 @@ interface Props {
 }
 
 export default function Header({ videoCount, progress, onMenuToggle }: Props) {
-  const [q, setQ] = useState('')
   const [authOpen, setAuthOpen] = useState(false)
   const [randomLoading, setRandomLoading] = useState(false)
   const navigate = useNavigate()
   const [sp] = useSearchParams()
   const { user, logout } = useAuth()
-
-  function submit(e: FormEvent) {
-    e.preventDefault()
-    if (q.trim()) navigate(`/search?q=${encodeURIComponent(q.trim())}`, { viewTransition: true })
-  }
 
   return (
     <>
@@ -49,23 +44,9 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
         <div className="lg:hidden ml-1"><BrandLogo size="nav" /></div>
         <div className="hidden lg:block ml-3 md:ml-6"><BrandLogo size="nav" /></div>
 
-        <form onSubmit={submit} className="hidden lg:block flex-1 min-w-0 max-w-xl relative">
-          <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted/60 pointer-events-none"
-               width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               strokeWidth="2" strokeLinecap="round">
-            <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-          </svg>
-          <input
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search videos..."
-            className="w-full pl-9 pr-3 py-2 rounded-full border border-border bg-card/80
-                      text-text text-sm outline-none
-                      hover:border-border hover:bg-card
-                      focus:border-orange/50 focus:ring-2 focus:ring-orange/15 focus:bg-card
-                      transition-all duration-200 placeholder:text-muted/50"
-          />
-        </form>
+        <div className="hidden lg:block flex-1 min-w-0 max-w-xl">
+          <SearchDropdown variant="desktop" />
+        </div>
 
         <div className="flex items-center gap-3 ml-auto">
         <button
@@ -81,7 +62,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
               const qs = params.toString()
               const res = await fetch(`/api/random${qs ? '?' + qs : ''}`)
               if (!res.ok) return
-              const data = await res.json()
+              const data = await res.json() as { id?: string }
               if (data.id) navigate(`/play/${data.id}`, { viewTransition: true })
             } finally {
               setRandomLoading(false)
@@ -116,7 +97,10 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
 
         {user ? (
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex-shrink-0 outline-none mr-3 md:mr-6">
+            <DropdownMenuTrigger
+              className="flex-shrink-0 outline-none mr-3 md:mr-6"
+              aria-label="Open account menu"
+            >
               <Avatar className="h-8 w-8 ring-2 ring-border hover:ring-orange transition-all cursor-pointer">
                 <AvatarFallback className="bg-orange/20 text-orange text-xs font-bold">
                   {user.username.slice(0, 2).toUpperCase()}

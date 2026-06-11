@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //go:embed templates/*
@@ -60,6 +62,13 @@ var (
 	startTime     = time.Now()
 	loginAttempts = make(map[string]*loginEntry)
 	loginMu       sync.Mutex
+	registerMu    sync.Mutex
+	registerIPs   = make(map[string]*loginEntry)
+	countCacheMu  sync.RWMutex
+	countCache    = map[string]struct {
+		n   int
+		exp time.Time
+	}{}
 )
 
 var userAgents = []string{
@@ -119,10 +128,12 @@ const (
 	retryBaseDelay                = 5 * time.Second
 	retryMaxDelay                 = 30 * time.Second
 	rateLimitInterval             = 400 * time.Millisecond
+	countCacheTTL                 = 45 * time.Second
 	failureBaseDelay              = 5 * time.Minute
 	failureMaxDelay               = 6 * time.Hour
 	maxFailuresPerBatch           = 20
 	maxScrapeFailuresBeforeDelete = 8
+	maxProxyBytes                 = 2 << 30
 	playableMediaSQL              = "(COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '')"
 	playableMediaSQLV             = "(COALESCE(v.url_360,'') <> '' OR COALESCE(v.url_720,'') <> '' OR COALESCE(v.url_1080,'') <> '' OR COALESCE(v.hls_url,'') <> '')"
 )
@@ -163,6 +174,27 @@ type loginEntry struct {
 	until    time.Time
 }
 
+type fkTableMigration struct {
+	name              string
+	createSQL         string
+	legacyCreateSQL   string
+	indexes           []string
+	requiredFragments []string
+}
+
+type fkOrphanCleanup struct {
+	tableName string
+	label     string
+	sql       string
+}
+
+type jwtPayload struct {
+	UID int    `json:"uid"`
+	UN  string `json:"un"`
+	Exp int64  `json:"exp"`
+	Iat int64  `json:"iat"`
+}
+
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -173,7 +205,69 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+func parseRemoteIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	return net.ParseIP(strings.Trim(host, "[]"))
+}
+
+func clientIP(r *http.Request) string {
+	remoteHost := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		remoteHost = host
+	}
+	remoteHost = strings.Trim(strings.TrimSpace(remoteHost), "[]")
+	peerIP := parseRemoteIP(r.RemoteAddr)
+	if peerIP == nil {
+		return remoteHost
+	}
+	if peerIP.IsLoopback() || peerIP.IsPrivate() {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
+			if forwardedIP := net.ParseIP(strings.Trim(first, "[]")); forwardedIP != nil {
+				return forwardedIP.String()
+			}
+		}
+	}
+	return peerIP.String()
+}
+
+func isRateLimited(mu *sync.Mutex, attempts map[string]*loginEntry, ip string, limit int) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	entry := attempts[ip]
+	return entry != nil && time.Now().Before(entry.until) && entry.attempts >= limit
+}
+
+func recordAttempt(mu *sync.Mutex, attempts map[string]*loginEntry, ip string, window time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
+	now := time.Now()
+	entry := attempts[ip]
+	if entry == nil || now.After(entry.until) {
+		attempts[ip] = &loginEntry{attempts: 1, until: now.Add(window)}
+		return
+	}
+	entry.attempts++
+}
+
+func clearAttempts(mu *sync.Mutex, attempts map[string]*loginEntry, ip string) {
+	mu.Lock()
+	delete(attempts, ip)
+	mu.Unlock()
+}
+
 func loadOrCreateJWTSecret() {
+	if envSecret, ok := os.LookupEnv("KARAXXX_JWT_SECRET"); ok {
+		if len(envSecret) >= 32 {
+			jwtSecret = envSecret
+			log.Println("Loaded JWT secret from env")
+			return
+		}
+		log.Printf("Ignoring KARAXXX_JWT_SECRET: too short (%d bytes)", len(envSecret))
+	}
 	secretFile := dbPath + ".jwt_secret"
 	if data, err := os.ReadFile(secretFile); err == nil && len(data) == 64 {
 		jwtSecret = string(data)
@@ -181,7 +275,7 @@ func loadOrCreateJWTSecret() {
 		return
 	}
 	jwtSecret = randomHex(32)
-	if err := os.WriteFile(secretFile, []byte(jwtSecret), 0600); err != nil {
+	if err := os.WriteFile(secretFile, []byte(jwtSecret), 0400); err != nil {
 		log.Printf("Warning: could not persist JWT secret: %v", err)
 	} else {
 		log.Println("Created new JWT secret")
@@ -230,14 +324,21 @@ func main() {
 	go runDBMaintenance()
 	go func() {
 		for range time.NewTicker(5 * time.Minute).C {
-			loginMu.Lock()
 			now := time.Now()
+			loginMu.Lock()
 			for ip, entry := range loginAttempts {
 				if now.After(entry.until) {
 					delete(loginAttempts, ip)
 				}
 			}
 			loginMu.Unlock()
+			registerMu.Lock()
+			for ip, entry := range registerIPs {
+				if now.After(entry.until) {
+					delete(registerIPs, ip)
+				}
+			}
+			registerMu.Unlock()
 		}
 	}()
 
@@ -293,7 +394,7 @@ func initHTTPClient() {
 	}
 	mediaClient = &http.Client{
 		Transport: mediaTr,
-		Timeout:   0,
+		Timeout:   15 * time.Second,
 		Jar:       jar,
 	}
 	scrapeSem = make(chan struct{}, scrapeWorkers)
@@ -545,6 +646,368 @@ func initDB() {
 		FOREIGN KEY (user_id) REFERENCES users(id),
 		FOREIGN KEY (video_id) REFERENCES videos(id)
 	)`)
+
+	migrateForeignKeyCascades()
+}
+
+func migrateForeignKeyCascades() {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		log.Printf("FK migration connection failed: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		log.Printf("FK migration could not disable foreign keys: %v", err)
+		return
+	}
+	restoreFKs := true
+	defer func() {
+		if restoreFKs {
+			if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+				log.Printf("FK migration could not restore foreign keys: %v", err)
+			}
+		}
+	}()
+
+	for _, migration := range foreignKeyCascadeMigrations() {
+		schemaSQL, err := loadTableSchemaSQL(ctx, conn, migration.name)
+		if err != nil {
+			log.Printf("FK migration schema lookup for %s failed: %v", migration.name, err)
+			continue
+		}
+		if schemaSQL == "" {
+			continue
+		}
+		if strings.Contains(strings.ToUpper(schemaSQL), "ON DELETE CASCADE") {
+			continue
+		}
+
+		createSQL := migration.createSQL
+		if migration.legacyCreateSQL != "" && schemaContainsAll(schemaSQL, migration.requiredFragments) {
+			createSQL = migration.legacyCreateSQL
+		}
+
+		tx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			log.Printf("FK migration for %s failed: %v", migration.name, err)
+			continue
+		}
+		if err := rebuildTableWithCascade(ctx, tx, migration.name, createSQL, migration.indexes); err != nil {
+			tx.Rollback()
+			log.Printf("FK migration for %s failed: %v", migration.name, err)
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			tx.Rollback()
+			log.Printf("FK migration for %s failed: %v", migration.name, err)
+			continue
+		}
+	}
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		log.Printf("FK migration could not restore foreign keys: %v", err)
+		return
+	}
+	restoreFKs = false
+
+	runForeignKeyOrphanCleanup(ctx, conn)
+}
+
+func foreignKeyCascadeMigrations() []fkTableMigration {
+	return []fkTableMigration{
+		{
+			name: "video_categories",
+			createSQL: `CREATE TABLE video_categories__new (
+		video_id TEXT NOT NULL,
+		category TEXT NOT NULL,
+		PRIMARY KEY (video_id, category),
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_vc_category ON video_categories(category)`,
+			},
+		},
+		{
+			name: "favorites",
+			createSQL: `CREATE TABLE favorites__new (
+		user_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (user_id, video_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "fav_categories",
+			createSQL: `CREATE TABLE fav_categories__new (
+		user_id INTEGER NOT NULL,
+		category TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (user_id, category),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "scrape_failures",
+			createSQL: `CREATE TABLE scrape_failures__new (
+		video_id TEXT PRIMARY KEY,
+		retry_count INTEGER DEFAULT 0,
+		last_error TEXT,
+		next_retry_at INTEGER,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_fail_next ON scrape_failures(next_retry_at)`,
+			},
+		},
+		{
+			name: "watch_history",
+			createSQL: `CREATE TABLE watch_history__new (
+		user_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		position INTEGER DEFAULT 0,
+		duration INTEGER DEFAULT 0,
+		play_count INTEGER DEFAULT 0,
+		watched_at TEXT DEFAULT (datetime('now')),
+		updated_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (user_id, video_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+			legacyCreateSQL: `CREATE TABLE watch_history__new (
+		user_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		position INTEGER DEFAULT 0,
+		duration INTEGER DEFAULT 0,
+		watched_at TEXT DEFAULT (datetime('now')),
+		updated_at TEXT DEFAULT (datetime('now')),
+		play_count INTEGER DEFAULT 0,
+		PRIMARY KEY (user_id, video_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+			requiredFragments: []string{
+				"UPDATED_AT TEXT DEFAULT (DATETIME('NOW')), PLAY_COUNT INTEGER DEFAULT 0",
+			},
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_watch_history_user ON watch_history(user_id, updated_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_watch_history_video ON watch_history(video_id)`,
+			},
+		},
+		{
+			name: "user_profiles",
+			createSQL: `CREATE TABLE user_profiles__new (
+		user_id INTEGER PRIMARY KEY,
+		display_name TEXT DEFAULT '',
+		anonymous_name TEXT NOT NULL,
+		comment_anonymously INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		updated_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "video_watch_counts",
+			createSQL: `CREATE TABLE video_watch_counts__new (
+		video_id TEXT PRIMARY KEY,
+		watch_count INTEGER DEFAULT 0,
+		updated_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "video_comments",
+			createSQL: `CREATE TABLE video_comments__new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		video_id TEXT NOT NULL,
+		user_id INTEGER NOT NULL,
+		body TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		anonymous INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id, created_at DESC)`,
+			},
+		},
+		{
+			name: "video_reactions",
+			createSQL: `CREATE TABLE video_reactions__new (
+		video_id TEXT NOT NULL,
+		user_id INTEGER NOT NULL,
+		reaction TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (video_id, user_id, reaction),
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_video_reactions_video ON video_reactions(video_id)`,
+			},
+		},
+		{
+			name: "wall_comments",
+			createSQL: `CREATE TABLE wall_comments__new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		wall_user_id INTEGER NOT NULL,
+		author_id INTEGER NOT NULL,
+		body TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		anonymous INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (wall_user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+			indexes: []string{
+				`CREATE INDEX IF NOT EXISTS idx_wall_comments_wall ON wall_comments(wall_user_id, created_at DESC)`,
+			},
+		},
+		{
+			name: "playlists",
+			createSQL: `CREATE TABLE playlists__new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		is_public INTEGER DEFAULT 0,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "playlist_videos",
+			createSQL: `CREATE TABLE playlist_videos__new (
+		playlist_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		position INTEGER DEFAULT 0,
+		added_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (playlist_id, video_id),
+		FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "ratings",
+			createSQL: `CREATE TABLE ratings__new (
+		user_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		rating INTEGER NOT NULL CHECK (rating IN (-1, 1)),
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (user_id, video_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+		},
+		{
+			name: "watch_later",
+			createSQL: `CREATE TABLE watch_later__new (
+		user_id INTEGER NOT NULL,
+		video_id TEXT NOT NULL,
+		position INTEGER DEFAULT 0,
+		added_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (user_id, video_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+	)`,
+		},
+	}
+}
+
+func rebuildTableWithCascade(ctx context.Context, tx *sql.Tx, tableName, createSQL string, indexes []string) error {
+	if _, err := tx.ExecContext(ctx, createSQL); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s__new SELECT * FROM %s", tableName, tableName)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DROP TABLE %s", tableName)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s__new RENAME TO %s", tableName, tableName)); err != nil {
+		return err
+	}
+	for _, indexSQL := range indexes {
+		if _, err := tx.ExecContext(ctx, indexSQL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runForeignKeyOrphanCleanup(ctx context.Context, conn *sql.Conn) {
+	for _, cleanup := range foreignKeyOrphanCleanups() {
+		schemaSQL, err := loadTableSchemaSQL(ctx, conn, cleanup.tableName)
+		if err != nil {
+			log.Printf("FK orphan cleanup schema lookup for %s failed: %v", cleanup.tableName, err)
+			continue
+		}
+		if schemaSQL == "" {
+			continue
+		}
+		res, err := conn.ExecContext(ctx, cleanup.sql)
+		if err != nil {
+			log.Printf("FK orphan cleanup for %s failed: %v", cleanup.label, err)
+			continue
+		}
+		rowsDeleted, err := res.RowsAffected()
+		if err == nil && rowsDeleted > 0 {
+			log.Printf("FK orphan cleanup removed %d rows from %s", rowsDeleted, cleanup.label)
+		}
+	}
+}
+
+func foreignKeyOrphanCleanups() []fkOrphanCleanup {
+	return []fkOrphanCleanup{
+		{tableName: "video_categories", label: "video_categories.video_id", sql: `DELETE FROM video_categories WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "scrape_failures", label: "scrape_failures.video_id", sql: `DELETE FROM scrape_failures WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "playlist_videos", label: "playlist_videos.video_id", sql: `DELETE FROM playlist_videos WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "playlist_videos", label: "playlist_videos.playlist_id", sql: `DELETE FROM playlist_videos WHERE playlist_id NOT IN (SELECT id FROM playlists)`},
+		{tableName: "watch_history", label: "watch_history.video_id", sql: `DELETE FROM watch_history WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "video_reactions", label: "video_reactions.video_id", sql: `DELETE FROM video_reactions WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "video_comments", label: "video_comments.video_id", sql: `DELETE FROM video_comments WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "video_watch_counts", label: "video_watch_counts.video_id", sql: `DELETE FROM video_watch_counts WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "ratings", label: "ratings.video_id", sql: `DELETE FROM ratings WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "watch_later", label: "watch_later.video_id", sql: `DELETE FROM watch_later WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "favorites", label: "favorites.video_id", sql: `DELETE FROM favorites WHERE video_id NOT IN (SELECT id FROM videos)`},
+		{tableName: "favorites", label: "favorites.user_id", sql: `DELETE FROM favorites WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "fav_categories", label: "fav_categories.user_id", sql: `DELETE FROM fav_categories WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "watch_history", label: "watch_history.user_id", sql: `DELETE FROM watch_history WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "playlists", label: "playlists.user_id", sql: `DELETE FROM playlists WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "video_comments", label: "video_comments.user_id", sql: `DELETE FROM video_comments WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "video_reactions", label: "video_reactions.user_id", sql: `DELETE FROM video_reactions WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "ratings", label: "ratings.user_id", sql: `DELETE FROM ratings WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "watch_later", label: "watch_later.user_id", sql: `DELETE FROM watch_later WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "user_profiles", label: "user_profiles.user_id", sql: `DELETE FROM user_profiles WHERE user_id NOT IN (SELECT id FROM users)`},
+		{tableName: "wall_comments", label: "wall_comments.author_id", sql: `DELETE FROM wall_comments WHERE author_id NOT IN (SELECT id FROM users)`},
+		{tableName: "wall_comments", label: "wall_comments.wall_user_id", sql: `DELETE FROM wall_comments WHERE wall_user_id NOT IN (SELECT id FROM users)`},
+	}
+}
+
+func loadTableSchemaSQL(ctx context.Context, conn *sql.Conn, tableName string) (string, error) {
+	var schemaSQL sql.NullString
+	err := conn.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&schemaSQL)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return schemaSQL.String, nil
+}
+
+func schemaContainsAll(schemaSQL string, fragments []string) bool {
+	upperSchema := strings.ToUpper(schemaSQL)
+	for _, fragment := range fragments {
+		if !strings.Contains(upperSchema, strings.ToUpper(fragment)) {
+			return false
+		}
+	}
+	return true
 }
 
 func ensureVideosFTSWithUploader() {
@@ -765,6 +1228,35 @@ func loadVideoCategories(videoID string) []string {
 	return categories
 }
 
+func cachedCount(key string, query string, args ...any) int {
+	cacheKey := fmt.Sprintf("%s|%s|%v", key, query, args)
+	now := time.Now()
+
+	countCacheMu.RLock()
+	entry, ok := countCache[cacheKey]
+	countCacheMu.RUnlock()
+	if ok && now.Before(entry.exp) {
+		return entry.n
+	}
+
+	var n int
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		log.Printf("cachedCount query failed (key=%s): %v", key, err)
+		return 0
+	}
+
+	countCacheMu.Lock()
+	countCache[cacheKey] = struct {
+		n   int
+		exp time.Time
+	}{
+		n:   n,
+		exp: now.Add(countCacheTTL),
+	}
+	countCacheMu.Unlock()
+	return n
+}
+
 func initInviteDB() {
 	var err error
 	db, err = sql.Open("sqlite3", sqliteDSN())
@@ -844,6 +1336,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"db_in_use":           stats.InUse,
 		"db_idle":             stats.Idle,
 		"db_wait_count":       stats.WaitCount,
+		"videos_total":        cachedCount("videos_total", "SELECT COUNT(*) FROM videos"),
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
@@ -1066,12 +1559,21 @@ func runInviteCLI(args []string) {
 }
 
 func hashPassword(password string) string {
-	salt := randomHex(16)
-	h := sha256.Sum256([]byte(salt + password))
-	return salt + ":" + hex.EncodeToString(h[:])
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("bcrypt hash failed: %v", err)
+		return ""
+	}
+	return string(hash)
 }
 
 func checkPassword(password, stored string) bool {
+	if stored == "" {
+		return false
+	}
+	if strings.HasPrefix(stored, "$2") {
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) == nil
+	}
 	parts := strings.SplitN(stored, ":", 2)
 	if len(parts) != 2 {
 		return false
@@ -1083,8 +1585,18 @@ func checkPassword(password, stored string) bool {
 
 func createToken(userID int, username string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := fmt.Sprintf(`{"uid":%d,"un":"%s","exp":%d}`, userID, username, time.Now().Add(30*24*time.Hour).Unix())
-	payloadB64 := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	now := time.Now()
+	payloadJSON, err := json.Marshal(jwtPayload{
+		UID: userID,
+		UN:  username,
+		Exp: now.Add(30 * 24 * time.Hour).Unix(),
+		Iat: now.Unix(),
+	})
+	if err != nil {
+		log.Printf("JWT: payload marshal error: %v", err)
+		return ""
+	}
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
 	signingInput := header + "." + payloadB64
 	mac := hmac.New(sha256.New, []byte(jwtSecret))
 	mac.Write([]byte(signingInput))
@@ -1101,6 +1613,7 @@ func setAuthCookie(w http.ResponseWriter, token string) {
 		Path:     "/",
 		MaxAge:   int((30 * 24 * time.Hour).Seconds()),
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -1112,6 +1625,7 @@ func clearAuthCookie(w http.ResponseWriter) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -1146,7 +1660,15 @@ func parseToken(token string) (int, string, bool) {
 	mac.Write([]byte(signingInput))
 	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if sig != expectedSig {
-		log.Printf("JWT: signature mismatch: got=%q want=%q", sig[:10], expectedSig[:10])
+		gotPreview := sig
+		if len(gotPreview) > 10 {
+			gotPreview = gotPreview[:10]
+		}
+		wantPreview := expectedSig
+		if len(wantPreview) > 10 {
+			wantPreview = wantPreview[:10]
+		}
+		log.Printf("JWT: signature mismatch: got=%q want=%q", gotPreview, wantPreview)
 		return 0, "", false
 	}
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(payload)
@@ -1154,11 +1676,7 @@ func parseToken(token string) (int, string, bool) {
 		log.Printf("JWT: payload decode error: %v", err)
 		return 0, "", false
 	}
-	var claims struct {
-		UID int    `json:"uid"`
-		UN  string `json:"un"`
-		Exp int64  `json:"exp"`
-	}
+	var claims jwtPayload
 	if err := json.Unmarshal(payloadJSON, &claims); err != nil {
 		log.Printf("JWT: claims parse error: %v, payload=%s", err, string(payloadJSON))
 		return 0, "", false
@@ -1206,6 +1724,10 @@ func registerUserWithInvite(username, password, inviteKey string) (int64, error)
 	if inviteKey == "" {
 		return 0, fmt.Errorf("invite key required")
 	}
+	passwordHash := hashPassword(password)
+	if passwordHash == "" {
+		return 0, fmt.Errorf("could not hash password")
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
@@ -1227,7 +1749,7 @@ func registerUserWithInvite(username, password, inviteKey string) (int64, error)
 		return 0, fmt.Errorf("invalid or expired invite key")
 	}
 
-	userRes, err := tx.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", username, hashPassword(password))
+	userRes, err := tx.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", username, passwordHash)
 	if err != nil {
 		return 0, fmt.Errorf("username taken")
 	}
@@ -1246,6 +1768,13 @@ func handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 405, "POST only")
 		return
 	}
+	ip := clientIP(r)
+	if isRateLimited(&registerMu, registerIPs, ip, 5) {
+		w.Header().Set("Retry-After", "900")
+		writeJSONError(w, 429, "too many registrations, try again in 15 minutes")
+		return
+	}
+	recordAttempt(&registerMu, registerIPs, ip, 15*time.Minute)
 	var body struct {
 		Username  string `json:"username"`
 		Password  string `json:"password"`
@@ -1282,19 +1811,12 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 405, "POST only")
 		return
 	}
-	ip := r.RemoteAddr
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		ip = strings.Split(forwarded, ",")[0]
-	}
-	loginMu.Lock()
-	entry, exists := loginAttempts[ip]
-	if exists && time.Now().Before(entry.until) && entry.attempts >= 5 {
-		loginMu.Unlock()
+	ip := clientIP(r)
+	if isRateLimited(&loginMu, loginAttempts, ip, 5) {
 		w.Header().Set("Retry-After", "900")
 		writeJSONError(w, 429, "too many attempts, try again in 15 minutes")
 		return
 	}
-	loginMu.Unlock()
 
 	var body struct {
 		Username string `json:"username"`
@@ -1309,19 +1831,20 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var hash string
 	err := db.QueryRow("SELECT id, password_hash FROM users WHERE username = ?", body.Username).Scan(&id, &hash)
 	if err != nil || !checkPassword(body.Password, hash) {
-		loginMu.Lock()
-		if !exists {
-			loginAttempts[ip] = &loginEntry{attempts: 1, until: time.Now().Add(15 * time.Minute)}
-		} else {
-			entry.attempts++
-		}
-		loginMu.Unlock()
+		recordAttempt(&loginMu, loginAttempts, ip, 15*time.Minute)
 		writeJSONError(w, 401, "invalid credentials")
 		return
 	}
-	loginMu.Lock()
-	delete(loginAttempts, ip)
-	loginMu.Unlock()
+	if !strings.HasPrefix(hash, "$2") {
+		if newHash := hashPassword(body.Password); newHash != "" {
+			if _, err := db.Exec("UPDATE users SET password_hash = ? WHERE id = ?", newHash, id); err != nil {
+				log.Printf("password hash migration failed for user %d: %v", id, err)
+			} else {
+				log.Printf("migrated legacy password hash for user %d", id)
+			}
+		}
+	}
+	clearAttempts(&loginMu, loginAttempts, ip)
 	token := createToken(id, body.Username)
 	writeAuthResponse(w, token, id, body.Username)
 }
@@ -1343,19 +1866,6 @@ func handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	clearAuthCookie(w)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-}
-
-func handleAuthDebug(w http.ResponseWriter, r *http.Request) {
-	auth := r.Header.Get("Authorization")
-	log.Printf("DEBUG auth header: %q", auth)
-	if strings.HasPrefix(auth, "Bearer ") {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		uid, un, ok := parseToken(token)
-		log.Printf("DEBUG parseToken: uid=%d un=%q ok=%v jwtSecret=%s", uid, un, ok, jwtSecret[:8])
-		fmt.Fprintf(w, `{"uid":%d,"un":"%s","ok":%v,"secret_prefix":"%s"}`, uid, un, ok, jwtSecret[:8])
-		return
-	}
-	fmt.Fprintf(w, `{"error":"no bearer token"}`)
 }
 
 func handleFavVideo(w http.ResponseWriter, r *http.Request) {
@@ -1506,6 +2016,8 @@ func initRoutes() {
 			switch {
 			case r.URL.Path == "/api/search":
 				handleAPISearch(w, r)
+			case r.URL.Path == "/api/search-suggest":
+				handleSearchSuggest(w, r)
 			case r.URL.Path == "/api/crawl":
 				handleAPICrawl(w, r)
 			case r.URL.Path == "/api/crawl-xh":
@@ -1538,8 +2050,6 @@ func initRoutes() {
 				handleAuthMe(w, r)
 			case r.URL.Path == "/api/auth/logout":
 				handleAuthLogout(w, r)
-			case r.URL.Path == "/api/auth/debug":
-				handleAuthDebug(w, r)
 			case strings.HasPrefix(r.URL.Path, "/api/fav/video/"):
 				handleFavVideo(w, r)
 			case r.URL.Path == "/api/fav/videos":
@@ -1596,6 +2106,7 @@ func initRoutes() {
 	http.HandleFunc("/vid/", handleVidProxy)
 	http.HandleFunc("/thumb/", handleThumbProxy)
 	http.HandleFunc("/api/search", handleAPISearch)
+	http.HandleFunc("/api/search-suggest", handleSearchSuggest)
 	http.HandleFunc("/api/crawl", handleAPICrawl)
 	http.HandleFunc("/api/crawl-xh", handleAPICrawlXh)
 	http.HandleFunc("/api/crawl-ep", handleAPICrawlEp)
@@ -1612,7 +2123,6 @@ func initRoutes() {
 	http.HandleFunc("/api/auth/login", handleAuthLogin)
 	http.HandleFunc("/api/auth/me", handleAuthMe)
 	http.HandleFunc("/api/auth/logout", handleAuthLogout)
-	http.HandleFunc("/api/auth/debug", handleAuthDebug)
 	http.HandleFunc("/api/fav/video/", handleFavVideo)
 	http.HandleFunc("/api/fav/videos", handleFavVideos)
 	http.HandleFunc("/api/fav/category", handleFavCategory)
@@ -1746,9 +2256,7 @@ func getProgressJSON() []byte {
 		p.DetailDone = 0
 		p.DetailTotal = 0
 	}
-	var total int
-	db.QueryRow("SELECT COUNT(*) FROM videos").Scan(&total)
-	p.TotalCount = total
+	p.TotalCount = cachedCount("videos_total", "SELECT COUNT(*) FROM videos")
 	p.SourceCounts = map[string]int{}
 	rows, err := db.Query("SELECT source, COUNT(*) FROM videos GROUP BY source")
 	if err == nil {
@@ -1756,7 +2264,10 @@ func getProgressJSON() []byte {
 		for rows.Next() {
 			var src string
 			var count int
-			rows.Scan(&src, &count)
+			if err := rows.Scan(&src, &count); err != nil {
+				log.Printf("progress source count scan failed: %v", err)
+				continue
+			}
 			p.SourceCounts[src] = count
 		}
 	}
@@ -1877,7 +2388,10 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		v := Video{}
 		var dur, views sql.NullInt64
 		var cats, uploadDate sql.NullString
-		rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source)
+		if err := rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source); err != nil {
+			log.Printf("uploader page row scan failed: %v", err)
+			continue
+		}
 		v.Duration = int(dur.Int64)
 		v.Views = int(views.Int64)
 		if cats.Valid && cats.String != "" {
@@ -1889,11 +2403,11 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		videos = append(videos, v)
 	}
 
-	count := 0
+	var count int
 	if normalizedCat != "" {
-		db.QueryRow("SELECT COUNT(*) FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ?", normalizedCat).Scan(&count)
+		count = cachedCount("cat_count:"+normalizedCat, "SELECT COUNT(*) FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ?", normalizedCat)
 	} else {
-		db.QueryRow("SELECT COUNT(*) FROM videos").Scan(&count)
+		count = cachedCount("videos_total", "SELECT COUNT(*) FROM videos")
 	}
 
 	totalPages := (count + perPage - 1) / perPage
@@ -2122,13 +2636,15 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 			ftsWhere += " AND " + strings.Join(whereClauses, " AND ")
 		}
 		var cnt int
-		db.QueryRow(countQuery+ftsWhere, append([]interface{}{sanitizeFTSQuery(q)}, args...)...).Scan(&cnt)
+		if err := db.QueryRow(countQuery+ftsWhere, append([]interface{}{sanitizeFTSQuery(q)}, args...)...).Scan(&cnt); err != nil {
+			log.Printf("browse FTS count scan failed for %q: %v", q, err)
+		}
 		count = cnt
 		if count == 0 {
 			count = len(videos)
 		}
 	} else {
-		db.QueryRow("SELECT COUNT(*) FROM videos v"+where, args...).Scan(&count)
+		count = cachedCount("browse_count:"+where, "SELECT COUNT(*) FROM videos v"+where, args...)
 	}
 
 	totalPages := 1
@@ -2286,6 +2802,10 @@ func handleThumbProxy(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if strings.Contains(path, "..") || strings.Contains(path, "\x00") || strings.HasPrefix(path, "/") {
+		http.NotFound(w, r)
+		return
+	}
 	targetURL := fmt.Sprintf("%s/%s", thumbCDN, path)
 	proxyCDN(w, r, targetURL)
 }
@@ -2294,6 +2814,23 @@ func handleMediaProxy(w http.ResponseWriter, r *http.Request) {
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
 		http.NotFound(w, r)
+		return
+	}
+	target, err := url.Parse(targetURL)
+	if err != nil || target.Hostname() == "" {
+		http.Error(w, "bad url", http.StatusBadRequest)
+		return
+	}
+	if target.Scheme != "https" {
+		http.Error(w, "forbidden scheme", http.StatusForbidden)
+		return
+	}
+	if !isAllowedCDNHost(target.Hostname()) {
+		http.Error(w, "forbidden host", http.StatusForbidden)
+		return
+	}
+	if !hasSafeResolvedIPs(target.Hostname()) {
+		http.Error(w, "forbidden target", http.StatusForbidden)
 		return
 	}
 	proxyCDN(w, r, targetURL)
@@ -2516,6 +3053,46 @@ func loadOrRefreshVideo(id string) (Video, bool) {
 	return loadFreshVideoByID(id, tokenRefreshLead)
 }
 
+var allowedCDNHostSuffixes = []string{
+	"xnxx-cdn.com",
+	"xhcdn.com",
+	"eporner.com",
+	"tnaflix.com",
+	"drtuber.com",
+	"drtst.com",
+}
+
+func isAllowedCDNHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix((&url.URL{Host: host}).Hostname(), "."))
+	if host == "" {
+		return false
+	}
+	for _, domain := range allowedCDNHostSuffixes {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSafeResolvedIPs(host string) bool {
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() ||
+			ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() ||
+			ip.IsPrivate() ||
+			ip.IsUnspecified() ||
+			ip.IsMulticast() {
+			return false
+		}
+	}
+	return true
+}
+
 func proxyCDN(w http.ResponseWriter, r *http.Request, targetURL string) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
@@ -2543,7 +3120,11 @@ func proxyCDN(w http.ResponseWriter, r *http.Request, targetURL string) {
 		}
 	}
 
-	resp, err := mediaClient.Do(req)
+	client := mediaClient
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, "CDN unreachable", 502)
 		return
@@ -2556,7 +3137,9 @@ func proxyCDN(w http.ResponseWriter, r *http.Request, targetURL string) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxProxyBytes)); err != nil {
+		log.Printf("proxy copy failed for %s: %v", targetURL, err)
+	}
 }
 
 func renderPlayPage(w http.ResponseWriter, r *http.Request, v Video) {
@@ -2617,6 +3200,95 @@ func fetchRelated(v Video) []Video {
 
 // --- API ---
 
+func handleSearchSuggest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) < 2 {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"categories": []map[string]interface{}{},
+			"videos":     []Video{},
+		})
+		return
+	}
+
+	categorySuggestions := []map[string]interface{}{}
+	categoryTerm := normalizeCategoryTerm(q)
+	if categoryTerm == "" {
+		categoryTerm = strings.ToLower(q)
+	}
+	rows, err := db.Query(`SELECT category, COUNT(*) AS c
+		FROM video_categories
+		WHERE category LIKE ? ESCAPE '\'
+		GROUP BY category
+		ORDER BY c DESC, category ASC
+		LIMIT 6`, escapeLikePattern(categoryTerm)+"%")
+	if err != nil {
+		log.Printf("search suggest category query failed for %q: %v", q, err)
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			var count int
+			if err := rows.Scan(&name, &count); err != nil {
+				log.Printf("search suggest category scan failed: %v", err)
+				continue
+			}
+			categorySuggestions = append(categorySuggestions, map[string]interface{}{
+				"name":  name,
+				"count": count,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("search suggest category rows error: %v", err)
+		}
+	}
+
+	videoSuggestions := []Video{}
+	sanitized := sanitizeFTSQuery(q)
+	if sanitized != "" {
+		rows, err := db.Query(
+			`SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx')
+			 FROM videos_fts f
+			 JOIN videos v ON v.rowid = f.rowid
+			 WHERE videos_fts MATCH ? AND `+playableMediaSQLV+`
+			 ORDER BY rank, COALESCE(v.views, 0) DESC
+			 LIMIT 6`, sanitized)
+		if err != nil {
+			log.Printf("search suggest video query failed for %q: %v", q, err)
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				v := Video{}
+				var dur, views sql.NullInt64
+				var cats, uploadDate sql.NullString
+				if err := rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source); err != nil {
+					log.Printf("search suggest video scan failed: %v", err)
+					continue
+				}
+				v.Duration = int(dur.Int64)
+				v.Views = int(views.Int64)
+				if cats.Valid && cats.String != "" {
+					v.Categories = strings.Split(cats.String, ",")
+				}
+				if uploadDate.Valid {
+					v.UploadDate = uploadDate.String
+				}
+				videoSuggestions = append(videoSuggestions, v)
+			}
+			if err := rows.Err(); err != nil {
+				log.Printf("search suggest video rows error: %v", err)
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"categories": categorySuggestions,
+		"videos":     videoSuggestions,
+	})
+}
+
 func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 
@@ -2628,14 +3300,19 @@ func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 
 	videos := scrapeXnxxSearch(q)
 
+	validIDs := make([]string, 0, len(videos))
+	for _, v := range videos {
+		if isValidXnxxID(v.ID) {
+			validIDs = append(validIDs, v.ID)
+		}
+	}
+	existingIDs := existingVideoIDSet(validIDs)
 	cached, newCount := 0, 0
 	for _, v := range videos {
 		if !isValidXnxxID(v.ID) {
 			continue
 		}
-		var exists string
-		db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-		if exists != "" {
+		if existingIDs[v.ID] {
 			cached++
 			continue
 		}
@@ -2645,9 +3322,15 @@ func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 		detail, err := scrapeVideoDetail(v.ID)
 		if err != nil {
 			log.Printf("Detail scrape failed for %s: %v", v.ID, err)
+			v.Source = "xnxx"
+			if v.AddedAt == "" {
+				v.AddedAt = time.Now().Format("2006-01-02")
+			}
+			storeVideo(v)
 			continue
 		}
 		storeVideo(detail)
+		existingIDs[v.ID] = true
 		newCount++
 	}
 
@@ -2808,6 +3491,7 @@ func runFullCrawl() {
 			detail, err := scrapeVideoDetail(vid)
 			if err != nil {
 				log.Printf("Detail scrape failed for %s: %v", vid, err)
+				storeExistingStubVideo(vid)
 				recordScrapeFailure(vid, err)
 				time.Sleep(2 * time.Second)
 				return
@@ -3264,6 +3948,7 @@ func detailScrapeBatch(ids []string, source string) {
 			detail, err := scrapeVideoDetail(vid)
 			if err != nil {
 				log.Printf("%s detail scrape failed for %s: %v", source, vid, err)
+				storeExistingStubVideo(vid)
 				recordScrapeFailure(vid, err)
 				time.Sleep(2 * time.Second)
 				return
@@ -4052,6 +4737,8 @@ func runXhCrawl() {
 				detail, err := scrapeXhVideoDetail(v.ID)
 				if err != nil {
 					log.Printf("xHamster detail scrape %s failed: %v", v.ID, err)
+					v.Source = "xhamster"
+					storeVideo(v)
 					recordScrapeFailure(v.ID, err)
 					continue
 				}
@@ -4325,6 +5012,8 @@ func runEpCrawl() {
 				detail, err := scrapeEpVideoDetail(v.ID)
 				if err != nil {
 					log.Printf("EPorner detail scrape %s failed: %v", v.ID, err)
+					v.Source = "eporner"
+					storeVideo(v)
 					continue
 				}
 				storeVideo(detail)
@@ -4585,6 +5274,59 @@ func sanitizeFTSQuery(q string) string {
 		terms[i] = t + "*"
 	}
 	return strings.Join(terms, " ")
+}
+
+func escapeLikePattern(term string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(term)
+}
+
+func existingVideoIDSet(ids []string) map[string]bool {
+	existing := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return existing
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := db.Query("SELECT id FROM videos WHERE id IN ("+placeholders+")", args...)
+	if err != nil {
+		log.Printf("existing video lookup failed: %v", err)
+		return existing
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			log.Printf("existing video scan failed: %v", err)
+			continue
+		}
+		existing[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("existing video rows error: %v", err)
+	}
+	return existing
+}
+
+func storeExistingStubVideo(id string) {
+	var v Video
+	var categories, tags string
+	err := db.QueryRow(`SELECT id, COALESCE(slug,''), COALESCE(title,''), COALESCE(description,''), COALESCE(categories,''), COALESCE(tags,''), COALESCE(uploader,''), COALESCE(upload_date,''), COALESCE(duration,0), COALESCE(views,0), COALESCE(added_at,''), COALESCE(source,'xnxx'), COALESCE(thumb_uuid,''), COALESCE(preview_url,'')
+		FROM videos WHERE id = ?`, id).
+		Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &categories, &tags, &v.Uploader, &v.UploadDate, &v.Duration, &v.Views, &v.AddedAt, &v.Source, &v.ThumbUUID, &v.PreviewURL)
+	if err != nil {
+		log.Printf("load stub video %s failed: %v", id, err)
+		return
+	}
+	if categories != "" {
+		v.Categories = strings.Split(categories, ",")
+	}
+	if tags != "" {
+		v.Tags = strings.Split(tags, ",")
+	}
+	storeVideo(v)
 }
 
 var tagToCat = map[string]string{

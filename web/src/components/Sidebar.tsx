@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, type FormEvent } from 'react'
-import { Link, useSearchParams, useNavigate } from 'react-router-dom'
+import { useEffect, useState, useCallback } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { fetchCategories, fetchTags } from '../api'
 import type { TagCount, Video } from '../types'
 import { SOURCES } from '../types'
@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth'
 import CategoryIcon from './CategoryIcon'
 import FilterSelect from './FilterSelect'
 import BrandLogo from './BrandLogo'
+import SearchDropdown from './SearchDropdown'
 
 type Sort = 'recent' | 'new' | 'views' | 'duration'
 
@@ -16,8 +17,6 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const [catsOpen, setCatsOpen] = useState(() => localStorage.getItem('kxxx_cats_open') !== 'false')
   const [tags, setTags] = useState<TagCount[]>([])
   const [tagsExpanded, setTagsExpanded] = useState(false)
-  const [searchQ, setSearchQ] = useState('')
-  const navigate = useNavigate()
   const [sp] = useSearchParams()
   const curCat = sp.get('cat') || ''
   const curSort = (sp.get('sort') as Sort) || 'recent'
@@ -41,17 +40,23 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   useEffect(() => {
     if (!token) { setPinnedCats([]); return }
     fetch('/api/fav/categories', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
+      .then((response) => {
+        if (!response.ok) return [] as string[]
+        return response.json() as Promise<string[]>
+      })
       .then(setPinnedCats)
-      .catch(() => {})
+      .catch(() => setPinnedCats([]))
   }, [token])
 
   useEffect(() => {
     if (!token) { setSuggestions([]); return }
     fetch('/api/suggestions', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
+      .then((response) => {
+        if (!response.ok) return [] as SuggestionGroup[]
+        return response.json() as Promise<SuggestionGroup[]>
+      })
       .then(setSuggestions)
-      .catch(() => {})
+      .catch(() => setSuggestions([]))
   }, [token])
 
   useEffect(() => {
@@ -123,6 +128,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                         : 'text-muted max-lg:opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 hover:text-orange'
                       }`}
           title={isPinned ? 'Unpin' : 'Pin to top'}
+          aria-label={isPinned ? `Unpin ${c}` : `Pin ${c} to top`}
         >
           <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
             <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
@@ -144,26 +150,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
       {/* Search — mobile only */}
       <div className="px-3 pb-2 lg:hidden">
-        <form
-          onSubmit={(e: FormEvent) => { e.preventDefault(); if (searchQ.trim()) { navigate(`/search?q=${encodeURIComponent(searchQ.trim())}`); onClose() } }}
-        >
-          <div className="relative">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted/60 pointer-events-none"
-                 width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 strokeWidth="2" strokeLinecap="round">
-              <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-            </svg>
-            <input
-              value={searchQ}
-              onChange={e => setSearchQ(e.target.value)}
-              placeholder="Search videos..."
-              className="w-full pl-8 pr-3 py-1.5 rounded-md border border-border bg-bg/80
-                         text-text text-sm outline-none
-                         focus:border-orange/50 focus:ring-2 focus:ring-orange/15
-                         transition-all duration-200 placeholder:text-muted/50"
-            />
-          </div>
-        </form>
+        <SearchDropdown variant="mobile" onNavigate={onClose} />
       </div>
 
       {/* Sort by */}
@@ -248,7 +235,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                             {v.thumb_uuid && (
                               <img
                                 src={v.source && v.source !== 'xnxx' ? `/media?url=${encodeURIComponent(v.thumb_uuid)}` : `/thumb/${v.thumb_uuid}/0/xn_23_t.jpg`}
-                                alt=""
+                                alt={v.title}
                                 className="w-full h-full object-cover"
                                 loading="lazy"
                               />
@@ -275,6 +262,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <button
           onClick={() => setCatsOpen(o => !o)}
           className="w-full flex items-center justify-between text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1 hover:text-text transition-colors"
+          aria-label={catsOpen ? 'Collapse categories' : 'Expand categories'}
         >
           Categories
           <svg className={`w-3 h-3 text-muted transition-transform ${catsOpen ? 'rotate-180' : ''}`}
