@@ -96,14 +96,23 @@ func handleForYou(w http.ResponseWriter, r *http.Request) {
 	var catClauses []string
 	var catArgs []interface{}
 	for cat := range weightedCats {
-		catClauses = append(catClauses, "v.categories LIKE ?")
-		catArgs = append(catArgs, "%"+cat+"%")
+		cat = normalizeCategoryTerm(cat)
+		if cat == "" {
+			continue
+		}
+		catClauses = append(catClauses, "?")
+		catArgs = append(catArgs, cat)
+	}
+	if len(catClauses) == 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"videos": []Video{}})
+		return
 	}
 	catArgs = append(catArgs, uid, uid, limit)
 
 	rows, err = db.Query(
-		`SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v
-			 WHERE (`+strings.Join(catClauses, " OR ")+`)
+		`SELECT DISTINCT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v
+			 JOIN video_categories vc ON vc.video_id = v.id
+			 WHERE vc.category IN (`+strings.Join(catClauses, ",")+`)
 			 AND `+playableMediaSQLV+`
 			 AND v.id NOT IN (SELECT video_id FROM watch_history WHERE user_id = ?)
 			 AND v.id NOT IN (SELECT video_id FROM favorites WHERE user_id = ?)
@@ -158,9 +167,13 @@ func handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var cat string
 		rows.Scan(&cat)
+		cat = normalizeCategoryTerm(cat)
+		if cat == "" {
+			continue
+		}
 		vrows, err := db.Query(
-			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE categories LIKE ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT 3",
-			"%"+cat+"%")
+			"SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v JOIN video_categories vc ON vc.video_id = v.id WHERE vc.category = ? AND "+playableMediaSQLV+" ORDER BY v.views DESC LIMIT 3",
+			cat)
 		if err != nil {
 			continue
 		}

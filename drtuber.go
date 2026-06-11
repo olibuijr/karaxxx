@@ -15,16 +15,16 @@ import (
 const dtBase = "https://www.drtuber.com"
 
 var (
-	reDtVideoLink   = regexp.MustCompile(`<a[^>]*href="/video/(\d+)/([^"]+)"[^>]*class="th ch-video[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>`)
-	reDtTimeThumb   = regexp.MustCompile(`<em[^>]*class="time_thumb"[^>]*>\s*<em>(\d+:\d+)</em>\s*</em>`)
-	reDtMetaDesc    = regexp.MustCompile(`<meta name="description" content="([^"]*)"`)
-	reDtTags        = regexp.MustCompile(`<a[^>]*href="/tags/[^"]*"[^>]*>([^<]+)</a>`)
-	reDtCatLinks    = regexp.MustCompile(`<a[^>]*href="/categories/[^"]*"[^>]*>([^<]+)</a>`)
-	reDtViews       = regexp.MustCompile(`<span[^>]*class="[^"]*views[^"]*"[^>]*>\s*([\d,.]+)\s*</span>`)
-	reDtOgTitle     = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
-	reDtOgImage     = regexp.MustCompile(`<meta property="og:image" content="([^"]*)"`)
-	reDtUploadDate  = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
-	reDtStarLinks   = regexp.MustCompile(`<a[^>]*href="/pornstars/[^"]*"[^>]*>([^<]+)</a>`)
+	reDtVideoLink  = regexp.MustCompile(`<a[^>]*href="/video/(\d+)/([^"]+)"[^>]*class="th ch-video[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>`)
+	reDtTimeThumb  = regexp.MustCompile(`<em[^>]*class="time_thumb"[^>]*>\s*<em>(\d+:\d+)</em>\s*</em>`)
+	reDtMetaDesc   = regexp.MustCompile(`<meta name="description" content="([^"]*)"`)
+	reDtTags       = regexp.MustCompile(`<a[^>]*href="/tags/[^"]*"[^>]*>([^<]+)</a>`)
+	reDtCatLinks   = regexp.MustCompile(`<a[^>]*href="/categories/[^"]*"[^>]*>([^<]+)</a>`)
+	reDtViews      = regexp.MustCompile(`<span[^>]*class="[^"]*views[^"]*"[^>]*>\s*([\d,.]+)\s*</span>`)
+	reDtOgTitle    = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
+	reDtOgImage    = regexp.MustCompile(`<meta property="og:image" content="([^"]*)"`)
+	reDtUploadDate = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
+	reDtStarLinks  = regexp.MustCompile(`<a[^>]*href="/pornstars/[^"]*"[^>]*>([^<]+)</a>`)
 )
 
 func httpGetDtWithRetry(urlStr string) (*http.Response, error) {
@@ -33,7 +33,9 @@ func httpGetDtWithRetry(urlStr string) (*http.Response, error) {
 	for attempt := 0; attempt < maxHTTPRetries; attempt++ {
 		if attempt > 0 {
 			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
-			if delay > retryMaxDelay { delay = retryMaxDelay }
+			if delay > retryMaxDelay {
+				delay = retryMaxDelay
+			}
 			time.Sleep(delay + time.Duration(rand.Intn(1000))*time.Millisecond)
 		}
 		req, _ := http.NewRequest("GET", urlStr, nil)
@@ -42,10 +44,15 @@ func httpGetDtWithRetry(urlStr string) (*http.Response, error) {
 		req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 		resp, err := httpClient.Do(req)
-		if err != nil { lastErr = err; continue }
+		if err != nil {
+			lastErr = err
+			continue
+		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			resp.Body.Close()
-			if attempt == maxHTTPRetries-1 { return nil, fmt.Errorf("HTTP %d", resp.StatusCode) }
+			if attempt == maxHTTPRetries-1 {
+				return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
 			continue
 		}
 		return resp, nil
@@ -68,11 +75,15 @@ func scrapeDtListing(pageURL string) []Video {
 
 	blocks := reDtVideoLink.FindAllStringSubmatch(bodyStr, -1)
 	for _, m := range blocks {
-		if len(m) < 5 { continue }
+		if len(m) < 5 {
+			continue
+		}
 		id := m[1]
 		slug := m[2]
 
-		if seen[id] { continue }
+		if seen[id] {
+			continue
+		}
 		seen[id] = true
 
 		v := Video{
@@ -98,7 +109,9 @@ func scrapeDtVideoDetail(videoID string) (Video, error) {
 
 	url := dtBase + "/video/" + videoID
 	resp, err := httpGetDtWithRetry(url)
-	if err != nil { return v, err }
+	if err != nil {
+		return v, err
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
 	resp.Body.Close()
 	bodyStr := string(body)
@@ -125,17 +138,23 @@ func scrapeDtVideoDetail(videoID string) (Video, error) {
 
 	tagMatches := reDtTags.FindAllStringSubmatch(bodyStr, -1)
 	for _, tm := range tagMatches {
-		if len(tm) > 1 { v.Tags = append(v.Tags, strings.TrimSpace(tm[1])) }
+		if len(tm) > 1 {
+			v.Tags = append(v.Tags, strings.TrimSpace(tm[1]))
+		}
 	}
 
 	catMatches := reDtCatLinks.FindAllStringSubmatch(bodyStr, -1)
 	for _, cm := range catMatches {
-		if len(cm) > 1 { v.Categories = append(v.Categories, strings.TrimSpace(cm[1])) }
+		if len(cm) > 1 {
+			v.Categories = append(v.Categories, strings.TrimSpace(cm[1]))
+		}
 	}
 
 	starMatches := reDtStarLinks.FindAllStringSubmatch(bodyStr, -1)
 	for _, sm := range starMatches {
-		if len(sm) > 1 { v.Tags = append(v.Tags, strings.TrimSpace(sm[1])) }
+		if len(sm) > 1 {
+			v.Tags = append(v.Tags, strings.TrimSpace(sm[1]))
+		}
 	}
 
 	if m := reDtUploadDate.FindStringSubmatch(bodyStr); len(m) > 1 {
@@ -189,17 +208,23 @@ func runDtCrawl() {
 
 			videos := scrapeDtListing(pageURL)
 			if len(videos) == 0 {
-				if page > 1 { break }
+				if page > 1 {
+					break
+				}
 				continue
 			}
 
 			for _, v := range videos {
-				if v.ID == "" || seen[v.ID] { continue }
+				if v.ID == "" || seen[v.ID] {
+					continue
+				}
 				seen[v.ID] = true
 
 				var exists string
 				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-				if exists != "" { continue }
+				if exists != "" {
+					continue
+				}
 
 				db.Exec(`INSERT OR IGNORE INTO videos (id, slug, title, duration, source, thumb_uuid, added_at) VALUES (?,?,?,?,?,?,?)`,
 					v.ID, v.Slug, v.Title, v.Duration, "drtuber", v.ThumbUUID, v.AddedAt)
