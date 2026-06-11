@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.15] — 2026-06-11
+
+### Changed
+- Liquid-glass login: three.js shader background, frosted glass auth card, View Transitions navigation, optimistic session restore + browse prefetch
+- Hero logo no longer overlaps tagline
+
 ## [0.3.14] — 2026-06-11
 
 ### Changed
