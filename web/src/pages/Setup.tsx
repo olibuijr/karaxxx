@@ -3,7 +3,9 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { useAuth } from '../lib/auth'
+import { prefetchBrowse } from '../api'
 import BrandLogo from '../components/BrandLogo'
+import LiquidGlassBackground from '../components/LiquidGlassBackground'
 
 const sourceUrl = 'https://github.com/olibuijr/karaxxx'
 
@@ -12,6 +14,9 @@ const benefits = [
   { icon: 'M4 16V4h16v12H4Zm0 4h16', text: 'Direct MP4 streams from the source' },
   { icon: 'M5 12h14M12 5v14', text: 'Favorites, playlists, and watch history' },
 ]
+
+const glassInput =
+  'h-10 border-white/10 bg-white/[0.04] text-text backdrop-blur-sm transition-colors focus:bg-white/[0.07] focus-visible:border-orange/40'
 
 export default function Setup() {
   const { login, register } = useAuth()
@@ -26,6 +31,8 @@ export default function Setup() {
     e.preventDefault()
     setError('')
     setBusy(true)
+    // Optimism: warm the first browse page while the auth round-trip is in flight.
+    prefetchBrowse()
     const result = mode === 'login'
       ? await login(username, password)
       : await register(username, password, inviteKey)
@@ -36,11 +43,13 @@ export default function Setup() {
   }
 
   return (
-    <main className="min-h-dvh bg-bg text-text flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-[960px] grid gap-8 md:grid-cols-[1fr_400px] md:items-center md:gap-12">
+    <main className="relative isolate min-h-dvh overflow-hidden bg-bg text-text flex items-center justify-center px-4 py-8">
+      <LiquidGlassBackground />
+
+      <div className="relative z-10 w-full max-w-[960px] grid gap-8 md:grid-cols-[1fr_400px] md:items-center md:gap-12">
 
         {/* Left — Brand + Value Prop */}
-        <section className="space-y-6 text-center md:text-left">
+        <section className="space-y-6 text-center md:text-left animate-in fade-in slide-in-from-bottom-4 duration-700">
           <div className="flex justify-center md:justify-start">
             <BrandLogo linked={false} showTagline size="hero" />
           </div>
@@ -82,80 +91,87 @@ export default function Setup() {
           </details>
         </section>
 
-        {/* Right — Auth Card */}
-        <section className="rounded-xl border border-white/10 bg-card p-6 shadow-[0_24px_80px_-42px_rgba(0,0,0,1)]">
-          <div className="mb-5 grid grid-cols-2 rounded-lg border border-border bg-bg p-1">
-            <button
-              type="button"
-              onClick={() => { setMode('login'); setError('') }}
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'login' ? 'bg-orange text-black shadow-sm' : 'text-muted hover:text-text'}`}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('register'); setError('') }}
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'register' ? 'bg-orange text-black shadow-sm' : 'text-muted hover:text-text'}`}
-            >
-              Use invite
-            </button>
-          </div>
+        {/* Right — Frosted glass auth card */}
+        <section className="relative rounded-2xl border border-white/10 bg-black/35 p-6 backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_24px_80px_-32px_rgba(0,0,0,0.9)] animate-in fade-in slide-in-from-bottom-6 duration-700">
+          {/* Specular top edge */}
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px rounded-t-2xl bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+          {/* Faint inner sheen */}
+          <div aria-hidden className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-b from-white/[0.05] via-transparent to-transparent" />
 
-          <form onSubmit={submit} className="space-y-4">
-            {mode === 'register' && (
+          <div className="relative">
+            <div className="mb-5 grid grid-cols-2 rounded-lg border border-white/10 bg-white/[0.04] p-1 backdrop-blur-sm">
+              <button
+                type="button"
+                onClick={() => { setMode('login'); setError('') }}
+                className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'login' ? 'bg-orange text-black shadow-sm' : 'text-muted hover:text-text'}`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('register'); setError('') }}
+                className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'register' ? 'bg-orange text-black shadow-sm' : 'text-muted hover:text-text'}`}
+              >
+                Use invite
+              </button>
+            </div>
+
+            <form onSubmit={submit} className="space-y-4">
+              {mode === 'register' && (
+                <div className="space-y-2">
+                  <Label htmlFor="setup-invite" className="text-sm text-muted">Invite key</Label>
+                  <Input
+                    id="setup-invite"
+                    value={inviteKey}
+                    onChange={e => setInviteKey(e.target.value)}
+                    className={glassInput}
+                    autoComplete="one-time-code"
+                    required
+                  />
+                </div>
+              )}
+
               <div className="space-y-2">
-                <Label htmlFor="setup-invite" className="text-sm text-muted">Invite key</Label>
+                <Label htmlFor="setup-username" className="text-sm text-muted">Username</Label>
                 <Input
-                  id="setup-invite"
-                  value={inviteKey}
-                  onChange={e => setInviteKey(e.target.value)}
-                  className="bg-bg border-border text-text h-10"
-                  autoComplete="one-time-code"
+                  id="setup-username"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  className={glassInput}
+                  autoComplete="username"
                   required
                 />
               </div>
-            )}
 
-            <div className="space-y-2">
-              <Label htmlFor="setup-username" className="text-sm text-muted">Username</Label>
-              <Input
-                id="setup-username"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                className="bg-bg border-border text-text h-10"
-                autoComplete="username"
-                required
-              />
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="setup-password" className="text-sm text-muted">Password</Label>
+                <Input
+                  id="setup-password"
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  className={glassInput}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  minLength={4}
+                  required
+                />
+              </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="setup-password" className="text-sm text-muted">Password</Label>
-              <Input
-                id="setup-password"
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="bg-bg border-border text-text h-10"
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                minLength={4}
-                required
-              />
-            </div>
+              {error && (
+                <p className="rounded-md border border-red/25 bg-red/10 px-3 py-2 text-xs text-red backdrop-blur-sm">
+                  {error}
+                </p>
+              )}
 
-            {error && (
-              <p className="rounded-md border border-red/25 bg-red/10 px-3 py-2 text-xs text-red">
-                {error}
-              </p>
-            )}
-
-            <Button
-              type="submit"
-              disabled={busy}
-              className="w-full h-10 bg-orange font-bold text-black hover:bg-orange/90 text-sm"
-            >
-              {busy ? 'Please wait...' : mode === 'login' ? 'Sign in' : 'Create account'}
-            </Button>
-          </form>
+              <Button
+                type="submit"
+                disabled={busy}
+                className="w-full h-10 bg-orange font-bold text-black hover:bg-orange/90 text-sm shadow-[0_8px_24px_-8px_rgba(249,115,22,0.6)] transition-shadow hover:shadow-[0_8px_32px_-6px_rgba(249,115,22,0.75)]"
+              >
+                {busy ? 'Unlocking…' : mode === 'login' ? 'Sign in' : 'Create account'}
+              </Button>
+            </form>
+          </div>
         </section>
 
       </div>

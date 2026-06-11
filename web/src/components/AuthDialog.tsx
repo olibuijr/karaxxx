@@ -35,7 +35,7 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
 
   return (
     <Dialog open={open} onOpenChange={(o: boolean) => { if (!o) onClose() }}>
-      <DialogContent className="bg-card border-border text-text sm:max-w-sm">
+      <DialogContent className="border-white/10 bg-black/50 text-text backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_24px_80px_-32px_rgba(0,0,0,0.9)] sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-lg font-bold tracking-tight">
             {mode === 'login' ? 'Sign in' : 'Create account'}
@@ -48,7 +48,7 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
               id="username"
               value={username}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUsername(e.target.value)}
-              className="bg-bg border-border text-text"
+              className="border-white/10 bg-white/[0.04] text-text backdrop-blur-sm focus:bg-white/[0.07]"
               autoComplete="username"
               required
             />
@@ -60,7 +60,7 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
               type="password"
               value={password}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
-              className="bg-bg border-border text-text"
+              className="border-white/10 bg-white/[0.04] text-text backdrop-blur-sm focus:bg-white/[0.07]"
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               required
               minLength={4}
@@ -73,7 +73,7 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
 	                id="invite-key"
 	                value={inviteKey}
 	                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInviteKey(e.target.value)}
-	                className="bg-bg border-border text-text"
+	                className="border-white/10 bg-white/[0.04] text-text backdrop-blur-sm focus:bg-white/[0.07]"
 	                autoComplete="one-time-code"
 	                required
 	              />

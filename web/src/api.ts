@@ -2,6 +2,17 @@ import type { BrowseParams, BrowseResponse, ChangelogInfo, CrawlProgress, Profil
 
 const BASE = '/api'
 
+// Optimistic prefetch: the login screen warms the first browse page while
+// the auth round-trip is in flight, so the app shell paints with data instantly.
+let browsePrefetch: Promise<BrowseResponse | null> | null = null
+
+export function prefetchBrowse(): void {
+  if (browsePrefetch) return
+  browsePrefetch = fetch(`${BASE}/browse`)
+    .then(res => (res.ok ? (res.json() as Promise<BrowseResponse>) : null))
+    .catch(() => null)
+}
+
 export async function fetchBrowse(params: BrowseParams): Promise<BrowseResponse> {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
@@ -12,6 +23,11 @@ export async function fetchBrowse(params: BrowseParams): Promise<BrowseResponse>
   if (params.source) sp.set('source', params.source)
 
   const qs = sp.toString()
+  if (!qs && browsePrefetch) {
+    const warmed = await browsePrefetch
+    browsePrefetch = null
+    if (warmed) return warmed
+  }
   const res = await fetch(`${BASE}/browse${qs ? '?' + qs : ''}`)
   if (!res.ok) throw new Error(`Browse failed: ${res.status}`)
   return res.json()

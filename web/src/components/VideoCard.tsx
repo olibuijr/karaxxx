@@ -42,7 +42,7 @@ export default function VideoCard({ video }: { video: Video }) {
   }, [])
 
   return (
-    <Link
+    <Link viewTransition
       to={`/play/${video.id}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}

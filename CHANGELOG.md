@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.13] — 2026-06-11
+
+### Changed
+- Surprise me visible on mobile too
+
+## [0.3.12] — 2026-06-11
+
+### Changed
+- Random+profile pushed right, Surprise me label
+
 ## [0.3.11] — 2026-06-11
 
 ### Changed

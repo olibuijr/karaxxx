@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useSearchParams, Link } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import VideoCard from '../components/VideoCard'
 import VideoCardSkeleton from '../components/VideoCardSkeleton'
 import FilterSelect from '../components/FilterSelect'
@@ -62,7 +62,7 @@ export default function Browse() {
 
   const removeFromHistory = useCallback(async (videoId: string) => {
     if (!token) return
-    await fetch(`/api/watch/history/${videoId}`, {
+    await fetch(`/api/watch/${videoId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` }
     })
@@ -212,47 +212,16 @@ export default function Browse() {
     <>
       {label && <div className="px-3 py-1 text-xs text-muted md:px-6">{label}</div>}
 
-      <div className="flex items-center gap-1.5 px-2.5 py-2 md:px-6 flex-wrap">
-        <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mr-1">Sort</span>
-        {sorts.map(s => (
-          <Link
-            key={s.value}
-            to={sortHref(s.value)}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
-                        ${sort === s.value
-                          ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
-                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
-                        }`}
-          >
-            {s.label}
-          </Link>
-        ))}
-
-        {/* Source on mobile — dropdown to save space */}
-        <div className="md:hidden w-full mt-1">
+      <div className="flex items-center gap-2 px-2.5 py-2 md:px-6">
+        <div className="w-32">
+          <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Sort</span>
+          <FilterSelect options={sorts} current={sort} getHref={sortHref} />
+        </div>
+        <div className="w-32">
           <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Source</span>
           <FilterSelect options={sources} current={sourceFilter} getHref={sourceHref} />
         </div>
-
-        {/* Source on desktop — pill buttons */}
-        <span className="w-px h-4 bg-white/10 mx-2 max-md:hidden" aria-hidden />
-        <span className="max-md:hidden flex items-center gap-1.5">
-          {sources.map(s => (
-            <Link
-              key={s.value}
-              to={sourceHref(s.value)}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
-                          ${sourceFilter === s.value
-                            ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
-                            : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
-                          }`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </span>
-        <span className="w-px h-4 bg-white/10 mx-2 max-md:hidden" aria-hidden />
-
+        <span className="w-px h-6 bg-white/10 mx-1" aria-hidden />
         {[
           { key: 'compact', icon: '\u25A6' },
           { key: 'comfortable', icon: '\u25A3' },

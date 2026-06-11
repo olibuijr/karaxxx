@@ -180,7 +180,7 @@ export default function Play() {
   useEffect(() => {
     if (countdown === null) return
     if (countdown <= 0) {
-      if (nextVideo) navigate(`/play/${nextVideo}`)
+      if (nextVideo) navigate(`/play/${nextVideo}`, { viewTransition: true })
       return
     }
     const t = setTimeout(() => setCountdown(countdown - 1), 1000)

@@ -26,7 +26,7 @@ export default function BrandLogo({
   if (!linked) return content
 
   return (
-    <Link to="/" className="inline-flex flex-shrink-0 select-none" aria-label="KaraXXX - Adult Playground home">
+    <Link viewTransition to="/" className="inline-flex flex-shrink-0 select-none" aria-label="KaraXXX - Adult Playground home">
       {content}
     </Link>
   )

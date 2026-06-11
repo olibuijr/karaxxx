@@ -100,7 +100,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const unpinnedCats = cats.filter(c => !pinnedSet.has(c))
 
   const catLink = (c: string, isPinned: boolean) => (
-    <Link
+    <Link viewTransition
       key={c}
       to={makeHref(c)}
       onClick={onClose}
@@ -137,7 +137,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                        bg-card/50 backdrop-blur-sm border-r border-white/5 flex flex-col
                        scrollbar-thin">
       {/* Branding */}
-      <div className="px-4 pt-4 pb-3 border-b border-border mx-3 mb-2">
+      <div className="hidden lg:block px-4 pt-4 pb-3 border-b border-border mx-3 mb-2">
         <BrandLogo size="sidebar" showTagline />
       </div>
 
@@ -238,7 +238,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                   {isOpen && (
                     <div className="mt-1 space-y-1">
                       {group.videos.slice(0, 3).map(v => (
-                        <Link
+                        <Link viewTransition
                           key={v.id}
                           to={`/play/${v.id}`}
                           className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-white/5 transition-colors"
@@ -283,7 +283,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         </button>
         {catsOpen && (
           <div className="flex flex-col gap-0.5">
-            <Link
+            <Link viewTransition
               to={makeHref()}
               onClick={onClose}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
@@ -313,7 +313,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
           </h2>
           <div className="flex flex-wrap gap-1.5" style={{ maxHeight: tagsExpanded ? 'none' : '200px', overflow: 'hidden' }}>
             {tags.map(t => (
-              <Link
+              <Link viewTransition
                 key={t.name}
                 to={`/?q=${encodeURIComponent(t.name)}`}
                 onClick={onClose}

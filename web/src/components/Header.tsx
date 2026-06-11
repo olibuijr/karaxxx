@@ -27,7 +27,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    if (q.trim()) navigate(`/search?q=${encodeURIComponent(q.trim())}`)
+    if (q.trim()) navigate(`/search?q=${encodeURIComponent(q.trim())}`, { viewTransition: true })
   }
 
   return (
@@ -46,6 +46,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
             </svg>
           </button>
         )}
+        <div className="lg:hidden ml-1"><BrandLogo size="nav" /></div>
         <div className="hidden lg:block ml-3 md:ml-6"><BrandLogo size="nav" /></div>
 
         <form onSubmit={submit} className="hidden lg:block flex-1 min-w-0 max-w-xl relative">
@@ -81,7 +82,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
               const res = await fetch(`/api/random${qs ? '?' + qs : ''}`)
               if (!res.ok) return
               const data = await res.json()
-              if (data.id) navigate(`/play/${data.id}`)
+              if (data.id) navigate(`/play/${data.id}`, { viewTransition: true })
             } finally {
               setRandomLoading(false)
             }
@@ -90,7 +91,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
                      text-muted hover:text-text hover:border-red/40 transition-colors"
           aria-label="Random video"
         >
-          <span className="text-xs font-medium hidden sm:inline">Surprise me!</span>
+          <span className="text-xs font-medium">Surprise me!</span>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="16 3 21 3 21 8"/>
             <line x1="4" y1="20" x2="21" y2="3"/>
@@ -102,12 +103,12 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
 
         <div className="text-xs text-muted flex-shrink-0 hidden sm:flex items-center gap-2">
           {videoCount != null && (
-            <Link to="/status" className="hover:text-orange transition-colors cursor-pointer">
+            <Link viewTransition to="/status" className="hover:text-orange transition-colors cursor-pointer">
               {videoCount.toLocaleString()} videos
             </Link>
           )}
           {progress && (
-            <Link to="/status" className="text-orange font-semibold hover:text-orange/80 transition-colors animate-pulse cursor-pointer">
+            <Link viewTransition to="/status" className="text-orange font-semibold hover:text-orange/80 transition-colors animate-pulse cursor-pointer">
               {progress}
             </Link>
           )}
@@ -127,31 +128,31 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
                 Signed in as <span className="text-text font-semibold">{user.username}</span>
               </div>
               <DropdownMenuItem
-                onClick={() => navigate('/profile')}
+                onClick={() => navigate('/profile', { viewTransition: true })}
                 className="text-sm cursor-pointer"
               >
                 Profile
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => navigate(`/wall/${encodeURIComponent(user.username)}`)}
+                onClick={() => navigate(`/wall/${encodeURIComponent(user.username)}`, { viewTransition: true })}
                 className="text-sm cursor-pointer"
               >
                 My Wall
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => navigate('/playlists')}
+                onClick={() => navigate('/playlists', { viewTransition: true })}
                 className="text-sm cursor-pointer"
               >
                 Playlists
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => navigate('/favorites')}
+                onClick={() => navigate('/favorites', { viewTransition: true })}
                 className="text-sm cursor-pointer"
               >
                 Favorites
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => navigate('/changelog')}
+                onClick={() => navigate('/changelog', { viewTransition: true })}
                 className="text-sm cursor-pointer"
               >
                 Changelog
