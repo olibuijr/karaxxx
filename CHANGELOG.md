@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.20] — 2026-06-11
+
+### Changed
+- Fix multi-category filtering on the main browse API (cat=a,b now correctly returns the intersection)
+
+## [0.3.19] — 2026-06-11
+
+### Changed
+- Multi-category filtering with active-filter pills; favorites sort; watch-history clear; filter persistence
+- Structured request-ID logging; better empty/loading/error states; mobile + a11y polish
+- CI pipeline added (build + race-tested)
+
 ## [0.3.18] — 2026-06-11
 
 ### Changed
