@@ -2,15 +2,18 @@ import { useEffect, useState, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { fetchCategories, fetchTags } from '../api'
 import type { TagCount, Video } from '../types'
+import { SOURCES } from '../types'
 import { useAuth } from '../lib/auth'
 import CategoryIcon from './CategoryIcon'
+import FilterSelect from './FilterSelect'
+import BrandLogo from './BrandLogo'
 
 type Sort = 'recent' | 'new' | 'views' | 'duration'
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [cats, setCats] = useState<string[]>([])
-  const [showAllCats, setShowAllCats] = useState(false)
   const [pinnedCats, setPinnedCats] = useState<string[]>([])
+  const [catsOpen, setCatsOpen] = useState(() => localStorage.getItem('kxxx_cats_open') !== 'false')
   const [tags, setTags] = useState<TagCount[]>([])
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [sp] = useSearchParams()
@@ -48,6 +51,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
       .then(setSuggestions)
       .catch(() => {})
   }, [token])
+
+  useEffect(() => {
+    localStorage.setItem('kxxx_cats_open', String(catsOpen))
+  }, [catsOpen])
 
   const toggleGroup = (cat: string) => {
     setExpandedGroups(prev => {
@@ -87,9 +94,8 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     { label: 'Longest', value: 'duration' },
   ]
 
-  const visibleCats = showAllCats ? cats : cats.slice(0, 12)
   const pinnedSet = new Set(pinnedCats)
-  const unpinnedCats = visibleCats.filter(c => !pinnedSet.has(c))
+  const unpinnedCats = cats.filter(c => !pinnedSet.has(c))
 
   const catLink = (c: string, isPinned: boolean) => (
     <Link
@@ -112,7 +118,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
           className={`ml-1 flex-shrink-0 w-4 h-4 rounded transition-all
                       ${isPinned
                         ? 'text-orange opacity-100'
-                        : 'text-muted opacity-0 group-hover:opacity-100 hover:text-orange'
+                        : 'text-muted max-lg:opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 hover:text-orange'
                       }`}
           title={isPinned ? 'Unpin' : 'Pin to top'}
         >
@@ -128,27 +134,22 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     <aside className="w-56 flex-shrink-0 h-[calc(100vh-3.5rem)] overflow-y-auto
                        bg-card/50 backdrop-blur-sm border-r border-white/5 flex flex-col
                        scrollbar-thin">
-      {/* Sort filters */}
+      {/* Branding */}
+      <div className="px-4 pt-4 pb-3 border-b border-border mx-3 mb-2">
+        <BrandLogo size="sidebar" showTagline />
+      </div>
+
+      {/* Sort by */}
       <div className="p-3 pb-2">
         <h2 className="text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1">
           Sort by
         </h2>
-        <div className="flex flex-col gap-0.5">
-          {sorts.map(s => (
-            <Link
-              key={s.value}
-              to={makeHref(curCat || undefined, s.value)}
-              onClick={onClose}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                          ${s.value === curSort
-                            ? 'bg-orange/15 text-orange'
-                            : 'text-muted hover:text-text hover:bg-white/5'
-                          }`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </div>
+        <FilterSelect
+          options={sorts}
+          current={curSort}
+          getHref={v => makeHref(curCat || undefined, v as Sort)}
+          onOptionClick={onClose}
+        />
       </div>
 
       <div className="mx-3 border-t border-border" />
@@ -158,22 +159,12 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <h2 className="text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1">
           Source
         </h2>
-        <div className="flex flex-col gap-0.5">
-          {[{ label: 'All', value: '' }, { label: 'XNXX', value: 'xnxx' }, { label: 'xHamster', value: 'xhamster' }].map(s => (
-            <Link
-              key={s.value}
-              to={makeHref(curCat || undefined, undefined, s.value || undefined)}
-              onClick={onClose}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                          ${s.value === curSource
-                            ? 'bg-white/8 text-text'
-                            : 'text-muted hover:text-text hover:bg-white/5'
-                          }`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </div>
+        <FilterSelect
+          options={SOURCES}
+          current={curSource}
+          getHref={v => makeHref(curCat || undefined, undefined, v || undefined)}
+          onOptionClick={onClose}
+        />
       </div>
 
       <div className="mx-3 border-t border-border" />
@@ -253,39 +244,39 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
       {suggestions.length > 0 && <div className="mx-3 border-t border-border" />}
 
       {/* Categories */}
-      <div className="p-3 pt-2 flex-1">
-        <h2 className="text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1">
+      <div className="p-3 pt-2">
+        <button
+          onClick={() => setCatsOpen(o => !o)}
+          className="w-full flex items-center justify-between text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1 hover:text-text transition-colors"
+        >
           Categories
-        </h2>
-        <div className="flex flex-col gap-0.5">
-          <Link
-            to={makeHref()}
-            onClick={onClose}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                        ${!curCat
-                          ? 'bg-white/8 text-text'
-                          : 'text-muted hover:text-text hover:bg-white/5'
-                        }`}
-          >
-            <span className="flex items-center gap-2">
-              <CategoryIcon className="h-3.5 w-3.5 text-orange/80" />
-              All videos
-            </span>
-          </Link>
-          {pinnedCats.filter(c => cats.includes(c) && visibleCats.includes(c)).length > 0 && unpinnedCats.length === 0 && (
-            <span className="px-3 py-1 text-[11px] text-muted">—</span>
-          )}
-          {unpinnedCats.map(c => catLink(c, false))}
-          {cats.length > 12 && (
-            <button
-              onClick={() => setShowAllCats(!showAllCats)}
-              className="px-3 py-1.5 rounded-md text-xs text-muted hover:text-text
-                         transition-colors text-left mt-1"
+          <svg className={`w-3 h-3 text-muted transition-transform ${catsOpen ? 'rotate-180' : ''}`}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        {catsOpen && (
+          <div className="flex flex-col gap-0.5">
+            <Link
+              to={makeHref()}
+              onClick={onClose}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                          ${!curCat
+                            ? 'bg-white/8 text-text'
+                            : 'text-muted hover:text-text hover:bg-white/5'
+                          }`}
             >
-              {showAllCats ? 'Show less' : `Show all (${cats.length})`}
-            </button>
-          )}
-        </div>
+              <span className="flex items-center gap-2">
+                <CategoryIcon className="h-3.5 w-3.5 text-orange/80" />
+                All videos
+              </span>
+            </Link>
+            {pinnedCats.filter(c => cats.includes(c)).length > 0 && unpinnedCats.length === 0 && (
+              <span className="px-3 py-1 text-[11px] text-muted">—</span>
+            )}
+            {unpinnedCats.map(c => catLink(c, false))}
+          </div>
+        )}
       </div>
 
       {/* Tags */}

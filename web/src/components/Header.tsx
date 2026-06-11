@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import { Avatar, AvatarFallback } from './ui/avatar'
+import BrandLogo from './BrandLogo'
 
 interface Props {
   videoCount?: number
@@ -31,13 +32,13 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
 
   return (
     <>
-      <header className="flex items-center gap-3 px-3 py-2.5
+      <header className="flex items-center gap-3 py-2.5
                         bg-bg/80 backdrop-blur-xl border-b border-white/5
                         shadow-[0_1px_0_rgba(255,255,255,0.03),0_8px_24px_-12px_rgba(0,0,0,0.6)]
-                        sticky top-0 z-50 md:px-6 md:py-3">
+                        sticky top-0 z-50 md:py-3">
         {onMenuToggle && (
           <button onClick={onMenuToggle}
-                  className="lg:hidden flex-shrink-0 p-2 -ml-1 text-muted hover:text-text transition-colors
+                  className="lg:hidden flex-shrink-0 p-2 ml-3 text-muted hover:text-text transition-colors
                             min-w-[44px] min-h-[44px] flex items-center justify-center"
                   aria-label="Toggle menu">
             <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -45,12 +46,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
             </svg>
           </button>
         )}
-        <Link to="/" className="font-extrabold text-lg tracking-tight flex-shrink-0 md:text-2xl select-none
-                                drop-shadow-[0_0_12px_rgba(229,9,20,0.25)]">
-          <span className="brand-kara">Kara</span>
-          <span className="brand-xxx">XXX</span>
-          <span className="ml-2 hidden text-sm font-semibold text-muted md:inline">Adult Playground</span>
-        </Link>
+        <BrandLogo size="nav" className="ml-3 md:ml-6" />
 
         <form onSubmit={submit} className="flex-1 min-w-0 max-w-xl relative">
           <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted/60 pointer-events-none"
@@ -117,7 +113,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
 
         {user ? (
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex-shrink-0 outline-none">
+            <DropdownMenuTrigger className="flex-shrink-0 outline-none mr-3 md:mr-6">
               <Avatar className="h-8 w-8 ring-2 ring-border hover:ring-orange transition-all cursor-pointer">
                 <AvatarFallback className="bg-orange/20 text-orange text-xs font-bold">
                   {user.username.slice(0, 2).toUpperCase()}
@@ -169,7 +165,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
         ) : (
           <button
             onClick={() => setAuthOpen(true)}
-            className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-full
+            className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 mr-3 md:mr-6 rounded-full
                        bg-orange text-black hover:bg-orange/90 transition-colors"
           >
             Sign in

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.6] — 2026-06-11
+
+### Changed
+- Show all categories collapsible with localStorage; Adult Playground in sidebar; more category mappings in backend; compact density smaller; theatre mode added; header full width
+
+## [0.3.5] — 2026-06-11
+
+### Changed
+- Added missing sources to sidebar; collapsed source pills into dropdown on mobile; shared SOURCES constant
+
+## [0.3.4] — 2026-06-11
+
+### Changed
+- Replaced sort/source filters with styled dropdowns; pin button now visible on mobile; category list no longer clipped
+
 ## [0.3.3] — 2026-06-11
 
 ### Changed

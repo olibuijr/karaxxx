@@ -3,6 +3,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { useAuth } from '../lib/auth'
+import BrandLogo from '../components/BrandLogo'
 
 const sourceUrl = 'https://github.com/olibuijr/karaxxx'
 
@@ -33,10 +34,7 @@ export default function Setup() {
       <div className="w-full max-w-[920px] grid gap-6 md:grid-cols-[1fr_420px] md:items-center">
         <section className="space-y-5">
           <div>
-            <div className="font-extrabold text-4xl tracking-tight md:text-6xl">
-              <span className="brand-kara">Kara</span><span className="brand-xxx">XXX</span>
-              <span className="block text-lg font-semibold text-muted md:text-2xl">Adult Playground</span>
-            </div>
+            <BrandLogo linked={false} showTagline size="hero" />
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted md:text-base">
               Private, invite-only access with user privacy in mind. No ads, analytics pixels, or third-party tracking scripts are loaded.
             </p>

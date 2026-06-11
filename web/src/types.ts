@@ -82,3 +82,12 @@ export interface ChangelogInfo {
   updated_at: string
   markdown: string
 }
+
+export const SOURCES: { label: string; value: string }[] = [
+  { label: 'All', value: '' },
+  { label: 'XNXX', value: 'xnxx' },
+  { label: 'xHamster', value: 'xhamster' },
+  { label: 'EPorner', value: 'eporner' },
+  { label: 'TNAFlix', value: 'tnaflix' },
+  { label: 'DrTuber', value: 'drtuber' },
+]

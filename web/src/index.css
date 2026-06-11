@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource/barlow-condensed/800.css";
+@import "@fontsource/barlow-condensed/900.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -17,6 +19,7 @@
 
   --font-sans: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
 
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -8px rgb(0 0 0 / 0.5);
   --shadow-glow: 0 0 0 1px rgb(249 115 22 / 0.25), 0 8px 32px -4px rgb(229 9 20 / 0.25);
@@ -106,4 +109,119 @@ video[data-preview].playing {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+.brand-logo3d {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  perspective: 900px;
+  isolation: isolate;
+  color: var(--color-text);
+}
+
+.brand-logo3d__word {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 900;
+  line-height: 0.82;
+  letter-spacing: 0;
+  transform: rotateX(10deg) rotateY(-10deg) skewX(-4deg);
+  transform-origin: left center;
+  transition: transform 180ms ease, filter 180ms ease;
+  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.55));
+}
+
+.brand-logo3d:hover .brand-logo3d__word {
+  transform: rotateX(8deg) rotateY(-5deg) skewX(-3deg) translateY(-1px);
+  filter: drop-shadow(0 14px 22px rgb(0 0 0 / 0.65));
+}
+
+.brand-logo3d__piece {
+  position: relative;
+  display: inline-block;
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-stroke: 0.018em rgb(255 255 255 / 0.12);
+}
+
+.brand-logo3d__piece::before,
+.brand-logo3d__piece::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.brand-logo3d__piece::before {
+  z-index: 2;
+  transform: translate(-0.022em, -0.04em);
+  color: transparent;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.86) 0%, rgb(255 255 255 / 0.16) 34%, transparent 58%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  mix-blend-mode: screen;
+}
+
+.brand-logo3d__piece::after {
+  z-index: -1;
+  transform: translate(0.095em, 0.105em) skewX(-9deg);
+  color: #250407;
+  text-shadow:
+    0.03em 0.03em 0 #3a070b,
+    0.06em 0.06em 0 #4a0a0d,
+    0.09em 0.09em 0 #170205,
+    0.14em 0.16em 0.16em rgb(0 0 0 / 0.7);
+}
+
+.brand-logo3d__piece--kara {
+  background-image: linear-gradient(145deg, #ff594f 0%, #ff1f29 38%, #b40710 74%, #5e0208 100%);
+  text-shadow:
+    0.018em 0.018em 0 #8f0510,
+    0.04em 0.04em 0 #6c030a,
+    0.065em 0.065em 0 #3a0206,
+    0 0.13em 0.32em rgb(229 9 20 / 0.34);
+}
+
+.brand-logo3d__piece--xxx {
+  margin-left: 0.045em;
+  background-image: linear-gradient(145deg, #ffc269 0%, #ff7c18 36%, #d84307 72%, #6b1702 100%);
+  text-shadow:
+    0.018em 0.018em 0 #a93006,
+    0.04em 0.04em 0 #782004,
+    0.065em 0.065em 0 #331003,
+    0 0.13em 0.34em rgb(249 115 22 / 0.38);
+}
+
+.brand-logo3d__tagline {
+  margin-top: 0.74em;
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: rgb(244 244 246 / 0.68);
+  text-shadow: 0 0.16em 0.7em rgb(0 0 0 / 0.72);
+}
+
+.brand-logo3d--sidebar .brand-logo3d__word {
+  font-size: 1.45rem;
+}
+
+.brand-logo3d--sidebar .brand-logo3d__tagline {
+  font-size: 0.52rem;
+}
+
+.brand-logo3d--hero .brand-logo3d__word {
+  font-size: clamp(4.4rem, 14vw, 7.4rem);
+}
+
+.brand-logo3d--hero .brand-logo3d__tagline {
+  margin-top: 0.62em;
+  font-size: clamp(0.95rem, 2.5vw, 1.45rem);
+  color: rgb(244 244 246 / 0.72);
 }

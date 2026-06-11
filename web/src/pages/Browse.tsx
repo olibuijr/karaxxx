@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import VideoCard from '../components/VideoCard'
 import VideoCardSkeleton from '../components/VideoCardSkeleton'
+import FilterSelect from '../components/FilterSelect'
 import { fetchBrowse, subscribeProgress } from '../api'
 import type { Video, CrawlProgress, BrowseParams } from '../types'
+import { SOURCES } from '../types'
 import { useAuth } from '../lib/auth'
 
 export default function Browse() {
@@ -28,13 +30,15 @@ export default function Browse() {
   const { token } = useAuth()
   const [history, setHistory] = useState<Video[]>([])
 
-  const [density, setDensity] = useState<'compact' | 'comfortable' | 'large'>(() => (localStorage.getItem('kxxx_density') as any) || 'comfortable')
+  const [density, setDensity] = useState<'compact' | 'comfortable' | 'large' | 'theatre'>(() => (localStorage.getItem('kxxx_density') as any) || 'comfortable')
   const [activeTab, setActiveTab] = useState<'browse' | 'for-you'>('browse')
   const [forYouVideos, setForYouVideos] = useState<Video[]>([])
   const [forYouLoading, setForYouLoading] = useState(false)
 
-  const densityGrid = density === 'compact'
-    ? 'grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6'
+  const densityGrid = density === 'theatre'
+    ? 'grid-cols-1 max-w-4xl mx-auto'
+    : density === 'compact'
+    ? 'grid-cols-4 xs:grid-cols-5 sm:grid-cols-6 md:grid-cols-7 lg:grid-cols-8 xl:grid-cols-10 2xl:grid-cols-12'
     : density === 'large'
     ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
     : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6'
@@ -202,20 +206,13 @@ export default function Browse() {
     return `/?${qs}`
   }
 
-  const sources: { label: string; value: string }[] = [
-    { label: 'All', value: '' },
-    { label: 'XNXX', value: 'xnxx' },
-    { label: 'xHamster', value: 'xhamster' },
-    { label: 'EPorner', value: 'eporner' },
-    { label: 'TNAFlix', value: 'tnaflix' },
-    { label: 'DrTuber', value: 'drtuber' },
-  ]
+  const sources = SOURCES
 
   return (
     <>
       {label && <div className="px-3 py-1 text-xs text-muted md:px-6">{label}</div>}
 
-      <div className="flex items-center gap-1.5 px-2.5 py-2.5 md:px-6 flex-wrap">
+      <div className="flex items-center gap-1.5 px-2.5 py-2 md:px-6 flex-wrap">
         <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mr-1">Sort</span>
         {sorts.map(s => (
           <Link
@@ -230,25 +227,37 @@ export default function Browse() {
             {s.label}
           </Link>
         ))}
-        <span className="w-px h-4 bg-white/10 mx-2" aria-hidden />
-        {sources.map(s => (
-          <Link
-            key={s.value}
-            to={sourceHref(s.value)}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
-                        ${sourceFilter === s.value
-                          ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
-                          : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
-                        }`}
-          >
-            {s.label}
-          </Link>
-        ))}
-        <span className="w-px h-4 bg-white/10 mx-2" aria-hidden />
+
+        {/* Source on mobile — dropdown to save space */}
+        <div className="md:hidden w-full mt-1">
+          <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Source</span>
+          <FilterSelect options={sources} current={sourceFilter} getHref={sourceHref} />
+        </div>
+
+        {/* Source on desktop — pill buttons */}
+        <span className="w-px h-4 bg-white/10 mx-2 max-md:hidden" aria-hidden />
+        <span className="max-md:hidden flex items-center gap-1.5">
+          {sources.map(s => (
+            <Link
+              key={s.value}
+              to={sourceHref(s.value)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-150
+                          ${sourceFilter === s.value
+                            ? 'bg-gradient-to-br from-orange to-red text-white shadow-[0_2px_12px_-2px_rgba(249,115,22,0.5)]'
+                            : 'bg-white/5 text-muted hover:text-text hover:bg-white/10 border border-white/5'
+                          }`}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </span>
+        <span className="w-px h-4 bg-white/10 mx-2 max-md:hidden" aria-hidden />
+
         {[
           { key: 'compact', icon: '\u25A6' },
           { key: 'comfortable', icon: '\u25A3' },
           { key: 'large', icon: '\u25A1' },
+          { key: 'theatre', icon: '\u25A0' },
         ].map(d => (
           <button key={d.key} onClick={() => { setDensity(d.key as any); localStorage.setItem('kxxx_density', d.key) }}
             className={`px-2 py-1 rounded-md text-xs font-semibold transition-all duration-150 ${density === d.key ? 'bg-white/10 text-orange shadow-inner' : 'text-muted hover:text-text hover:bg-white/5'}`}>
