@@ -1,20 +1,86 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import VideoCard from '../components/VideoCard'
 import VideoCardSkeleton from '../components/VideoCardSkeleton'
 import FilterSelect from '../components/FilterSelect'
-import { fetchBrowse, fetchCategories, subscribeProgress } from '../api'
-import type { Video, CrawlProgress, BrowseParams } from '../types'
+import { clearWatchHistory, fetchBrowse, fetchCategories, subscribeProgress } from '../api'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '../components/ui/dialog'
+import { parseCategories, toggleCategoryParam } from '../lib/categories'
+import type { Video, CrawlProgress } from '../types'
 import { SOURCES } from '../types'
 import { useAuth } from '../lib/auth'
 
+type BrowseSort = 'recent' | 'new' | 'views' | 'duration'
+type Density = 'compact' | 'comfortable' | 'large' | 'theatre'
+
+const SORT_VALUES: readonly BrowseSort[] = ['recent', 'new', 'views', 'duration']
+const DENSITY_VALUES: readonly Density[] = ['compact', 'comfortable', 'large', 'theatre']
+const DENSITY_OPTIONS: ReadonlyArray<{ key: Density; icon: string }> = [
+  { key: 'compact', icon: '\u25A6' },
+  { key: 'comfortable', icon: '\u25A3' },
+  { key: 'large', icon: '\u25A1' },
+  { key: 'theatre', icon: '\u25A0' },
+]
+
+function readStored(key: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Ignore disabled or unavailable storage.
+  }
+}
+
+function isBrowseSort(value: string | null): value is BrowseSort {
+  return value !== null && SORT_VALUES.includes(value as BrowseSort)
+}
+
+function isDensity(value: string | null): value is Density {
+  return value !== null && DENSITY_VALUES.includes(value as Density)
+}
+
+function isSourceValue(value: string | null): value is string {
+  return value !== null && SOURCES.some((source) => source.value === value)
+}
+
 export default function Browse() {
+  const navigate = useNavigate()
   const [sp] = useSearchParams()
-  const sort = sp.get('sort') || 'recent'
+  const [storedSort, setStoredSort] = useState<BrowseSort>(() => {
+    const stored = readStored('kxxx_sort')
+    return isBrowseSort(stored) ? stored : 'recent'
+  })
+  const [storedSource, setStoredSource] = useState<string>(() => {
+    const stored = readStored('kxxx_source')
+    return isSourceValue(stored) ? stored : ''
+  })
+  const sortParam = sp.get('sort')
+  const sourceParam = sp.get('source')
+  const hasSortParam = sp.has('sort')
+  const hasSourceParam = sp.has('source')
+  const sort = isBrowseSort(sortParam) ? sortParam : storedSort
   const cat = sp.get('cat') || ''
   const q = sp.get('q') || ''
   const uploader = sp.get('uploader') || ''
-  const sourceFilter = sp.get('source') || ''
+  const sourceFilter = isSourceValue(sourceParam) ? sourceParam : storedSource
 
   const [videos, setVideos] = useState<Video[]>([])
   const [page, setPage] = useState(0)
@@ -34,11 +100,23 @@ export default function Browse() {
 
   const { token } = useAuth()
   const [history, setHistory] = useState<Video[]>([])
+  const [clearHistoryOpen, setClearHistoryOpen] = useState(false)
+  const [clearingHistory, setClearingHistory] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
 
-  const [density, setDensity] = useState<'compact' | 'comfortable' | 'large' | 'theatre'>(() => (localStorage.getItem('kxxx_density') as any) || 'comfortable')
+  const [density, setDensity] = useState<Density>(() => {
+    const stored = readStored('kxxx_density')
+    return isDensity(stored) ? stored : 'comfortable'
+  })
   const [activeTab, setActiveTab] = useState<'browse' | 'for-you'>('browse')
-  const [forYouVideos, setForYouVideos] = useState<Video[]>([])
+  const [forYouVideos, setForYouVideos] = useState<Array<Video & { reason?: string }>>([])
   const [forYouLoading, setForYouLoading] = useState(false)
+
+  const activeCategories = parseCategories(cat)
+  const activeFilterCount = activeCategories.length + (sourceFilter ? 1 : 0)
+  const activeSource = sourceFilter
+    ? SOURCES.find((source) => source.value === sourceFilter) ?? null
+    : null
 
   const densityGrid = density === 'theatre'
     ? 'grid-cols-1 max-w-4xl mx-auto'
@@ -56,6 +134,20 @@ export default function Browse() {
   const filters = `${sort}|${cat}|${q}|${uploader}|${sourceFilter}`
 
   useEffect(() => {
+    if (!hasSortParam) return
+    const nextSort = isBrowseSort(sortParam) ? sortParam : 'recent'
+    setStoredSort(nextSort)
+    writeStored('kxxx_sort', nextSort)
+  }, [hasSortParam, sortParam])
+
+  useEffect(() => {
+    if (!hasSourceParam) return
+    const nextSource = isSourceValue(sourceParam) ? sourceParam : ''
+    setStoredSource(nextSource)
+    writeStored('kxxx_source', nextSource)
+  }, [hasSourceParam, sourceParam])
+
+  useEffect(() => {
     fetchCategories()
       .then((categories) => {
         setCategoryOptions([
@@ -70,6 +162,7 @@ export default function Browse() {
 
   useEffect(() => {
     if (!token) { setHistory([]); return }
+    setClearError(null)
     fetch(`/api/watch/history?limit=8`, {
       headers: { Authorization: `Bearer ${token}` }
     })
@@ -90,6 +183,56 @@ export default function Browse() {
     setHistory(prev => prev.filter(h => h.id !== videoId))
   }, [token])
 
+  const updateHref = useCallback((mutate: (params: URLSearchParams) => void) => {
+    const params = new URLSearchParams(sp)
+    mutate(params)
+    const qs = params.toString()
+    return qs ? `/?${qs}` : '/'
+  }, [sp])
+
+  const handleClearHistoryConfirm = useCallback(async () => {
+    if (!token || clearingHistory) return
+    setClearingHistory(true)
+    setClearError(null)
+    try {
+      await clearWatchHistory(token)
+      setHistory([])
+      setClearHistoryOpen(false)
+    } catch {
+      setClearError("Couldn't clear history.")
+    } finally {
+      setClearingHistory(false)
+    }
+  }, [clearingHistory, token])
+
+  const handleRemoveCategoryFilter = useCallback((category: string) => {
+    const href = updateHref((params) => {
+      const nextCat = toggleCategoryParam(params.get('cat'), category)
+      if (nextCat) params.set('cat', nextCat)
+      else params.delete('cat')
+    })
+    navigate(href, { viewTransition: true })
+  }, [navigate, updateHref])
+
+  const handleRemoveSourceFilter = useCallback(() => {
+    setStoredSource('')
+    writeStored('kxxx_source', '')
+    const href = updateHref((params) => {
+      params.delete('source')
+    })
+    navigate(href, { viewTransition: true })
+  }, [navigate, updateHref])
+
+  const handleClearActiveFilters = useCallback(() => {
+    setStoredSource('')
+    writeStored('kxxx_source', '')
+    const href = updateHref((params) => {
+      params.delete('cat')
+      params.delete('source')
+    })
+    navigate(href, { viewTransition: true })
+  }, [navigate, updateHref])
+
   useEffect(() => {
     setVideos([])
     setPage(0)
@@ -99,7 +242,7 @@ export default function Browse() {
     setBrowseError(null)
     setLoadMoreError(null)
     busyRef.current = false
-    fetchBrowse({ page: 1, sort: sort as BrowseParams['sort'], cat, q, uploader, source: sourceFilter || undefined })
+    fetchBrowse({ page: 1, sort, cat, q, uploader, source: sourceFilter || undefined })
       .then(d => {
         setVideos(d.videos)
         setPage(1)
@@ -120,8 +263,8 @@ export default function Browse() {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then((response) => {
-        if (!response.ok) return [] as Video[]
-        return response.json() as Promise<Video[]>
+        if (!response.ok) return [] as Array<Video & { reason?: string }>
+        return response.json() as Promise<Array<Video & { reason?: string }>>
       })
       .then(setForYouVideos)
       .catch(() => setForYouVideos([]))
@@ -133,7 +276,7 @@ export default function Browse() {
     busyRef.current = true
     setLoadingMore(true)
     setLoadMoreError(null)
-    fetchBrowse({ page: page + 1, sort: sort as BrowseParams['sort'], cat, q, uploader, source: sourceFilter || undefined })
+    fetchBrowse({ page: page + 1, sort, cat, q, uploader, source: sourceFilter || undefined })
       .then(d => {
         setVideos(prev => [...prev, ...d.videos])
         setPage(d.page)
@@ -218,11 +361,9 @@ export default function Browse() {
     : ''
 
   const sortHref = (s: string) => {
-    const p = new URLSearchParams(sp)
-    if (s === 'recent') p.delete('sort')
-    else p.set('sort', s)
-    const qs = p.toString()
-    return `/?${qs}`
+    return updateHref((params) => {
+      params.set('sort', s)
+    })
   }
 
   const sorts: { label: string; value: string }[] = [
@@ -233,19 +374,21 @@ export default function Browse() {
   ]
 
   const sourceHref = (src: string) => {
-    const p = new URLSearchParams(sp)
-    if (src === '') p.delete('source')
-    else p.set('source', src)
-    const qs = p.toString()
-    return `/?${qs}`
+    return updateHref((params) => {
+      params.set('source', src)
+    })
   }
 
   const categoryHref = (value: string) => {
-    const p = new URLSearchParams(sp)
-    if (value === '') p.delete('cat')
-    else p.set('cat', value)
-    const qs = p.toString()
-    return qs ? `/?${qs}` : '/'
+    return updateHref((params) => {
+      if (value === '') {
+        params.delete('cat')
+        return
+      }
+      const nextCat = toggleCategoryParam(params.get('cat'), value)
+      if (nextCat) params.set('cat', nextCat)
+      else params.delete('cat')
+    })
   }
 
   const sources = SOURCES
@@ -255,9 +398,9 @@ export default function Browse() {
       {label && <div className="px-3 py-1 text-xs text-muted md:px-6">{label}</div>}
 
       <div className="flex items-center gap-2 px-2.5 py-2 md:px-6">
-        <div className="w-32">
+        <div className="hidden lg:block w-32">
           <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Category</span>
-          <FilterSelect options={categoryOptions} current={cat} getHref={categoryHref} />
+          <FilterSelect options={categoryOptions} current={activeCategories[0] || ''} getHref={categoryHref} />
         </div>
         <div className="w-32">
           <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Sort</span>
@@ -268,13 +411,8 @@ export default function Browse() {
           <FilterSelect options={sources} current={sourceFilter} getHref={sourceHref} />
         </div>
         <span className="w-px h-6 bg-white/10 mx-1" aria-hidden />
-        {[
-          { key: 'compact', icon: '\u25A6' },
-          { key: 'comfortable', icon: '\u25A3' },
-          { key: 'large', icon: '\u25A1' },
-          { key: 'theatre', icon: '\u25A0' },
-        ].map(d => (
-          <button key={d.key} onClick={() => { setDensity(d.key as any); localStorage.setItem('kxxx_density', d.key) }}
+        {DENSITY_OPTIONS.map(d => (
+          <button key={d.key} onClick={() => { setDensity(d.key); writeStored('kxxx_density', d.key) }}
             className={`px-2 py-1 rounded-md text-xs font-semibold transition-all duration-150 ${density === d.key ? 'bg-white/10 text-orange shadow-inner' : 'text-muted hover:text-text hover:bg-white/5'}`}>
             {d.icon}
           </button>
@@ -294,15 +432,117 @@ export default function Browse() {
         </div>
       )}
 
+      {activeFilterCount > 0 && (
+        <div className="px-2.5 py-2 md:px-6">
+          <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap rounded-2xl border border-white/10 bg-white/[0.04] px-2.5 py-2 text-xs backdrop-blur">
+            {activeCategories.map((category) => (
+              <div
+                key={category}
+                className="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-orange/20 bg-orange/10 px-2.5 py-1 text-xs font-semibold text-orange capitalize"
+              >
+                <span>{category}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${category} filter`}
+                  onClick={() => handleRemoveCategoryFilter(category)}
+                  className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full text-sm leading-none transition-colors hover:bg-orange/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40 lg:min-h-0 lg:min-w-0 lg:p-1"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+
+            {activeSource && (
+              <div className="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-orange/20 bg-orange/10 px-2.5 py-1 text-xs font-semibold text-orange">
+                <span>{activeSource.label}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${activeSource.label} filter`}
+                  onClick={handleRemoveSourceFilter}
+                  className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full text-sm leading-none transition-colors hover:bg-orange/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40 lg:min-h-0 lg:min-w-0 lg:p-1"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
+            {activeFilterCount >= 2 && (
+              <button
+                type="button"
+                onClick={handleClearActiveFilters}
+                className="inline-flex flex-shrink-0 items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-text backdrop-blur transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {!isForYou && history.length > 0 && (
         <div className="px-2.5 md:px-6">
-          <h2 className="text-sm font-bold mb-2">Continue Watching</h2>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold">Continue Watching</h2>
+              {clearError && <span className="text-xs text-red">{clearError}</span>}
+            </div>
+            {token && (
+              <Dialog
+                open={clearHistoryOpen}
+                onOpenChange={(open) => {
+                  setClearHistoryOpen(open)
+                  if (open) setClearError(null)
+                }}
+              >
+                <DialogTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-muted backdrop-blur transition-colors hover:bg-white/10 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40"
+                    />
+                  }
+                >
+                  Clear history
+                </DialogTrigger>
+                <DialogContent showCloseButton={false} className="border-white/10 bg-bg/90 text-text backdrop-blur">
+                  <DialogHeader>
+                    <DialogTitle>Clear watch history?</DialogTitle>
+                    <DialogDescription className="text-muted">
+                      This removes every video from your Continue Watching list. This can&apos;t be undone.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter className="border-white/10 bg-white/[0.04]">
+                    <DialogClose
+                      render={
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-md border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-text transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40"
+                        />
+                      }
+                    >
+                      Cancel
+                    </DialogClose>
+                    <button
+                      type="button"
+                      onClick={handleClearHistoryConfirm}
+                      disabled={clearingHistory}
+                      className="inline-flex items-center justify-center rounded-md bg-red px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {clearingHistory ? 'Clearing…' : 'Clear history'}
+                    </button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
           <div className="overflow-x-auto flex gap-2.5 pb-2 snap-x snap-mandatory">
             {history.map(h => (
               <div key={h.id} className="relative flex-shrink-0 w-48 snap-start">
                 <button
+                  type="button"
+                  aria-label="Remove from history"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFromHistory(h.id) }}
-                  className="absolute top-1 right-1 z-20 w-5 h-5 rounded-full bg-black/60 text-white text-xs flex items-center justify-center hover:bg-red/80 transition-colors"
+                  className="absolute top-0.5 right-0.5 z-20 flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full bg-black/60 text-white text-xs transition-colors hover:bg-red/80 lg:top-1 lg:right-1 lg:min-h-0 lg:min-w-0 lg:h-5 lg:w-5"
                 >
                   X
                 </button>
@@ -323,7 +563,7 @@ export default function Browse() {
 
       {!showLoading && showVideos.length === 0 && (
         <div className="text-center py-16 text-muted">
-          {browseError ?? (q ? `No results for "${q}".` : uploader ? `No videos for ${uploader}.` : 'No videos yet.')}
+          {browseError ?? (q ? `No results for "${q}".` : uploader ? `No videos for ${uploader}.` : activeFilterCount > 0 ? 'No results for these filters.' : 'No videos yet.')}
         </div>
       )}
 
@@ -332,8 +572,8 @@ export default function Browse() {
         {showVideos.map(v => (
           <div key={v.id}>
             <VideoCard video={v} />
-            {isForYou && (v as any).reason && (
-              <span className="text-[10px] text-orange/80 mt-1 block">{(v as any).reason}</span>
+            {isForYou && 'reason' in v && typeof v.reason === 'string' && (
+              <span className="text-[10px] text-orange/80 mt-1 block">{v.reason}</span>
             )}
           </div>
         ))}

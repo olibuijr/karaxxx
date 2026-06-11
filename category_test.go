@@ -45,3 +45,37 @@ func TestJoinStoredCategoriesFallsBackToUncategorized(t *testing.T) {
 		t.Fatalf("joinStoredCategories() = %q, want %q", got, "uncategorized")
 	}
 }
+
+func TestParseCategoryFilter(t *testing.T) {
+	got := parseCategoryFilter("Anal, teen ,ANAL,,uncategorized")
+	want := []string{"anal", "teen"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseCategoryFilter() = %#v, want %#v", got, want)
+	}
+
+	got = parseCategoryFilter("")
+	want = []string{}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseCategoryFilter(\"\") = %#v, want %#v", got, want)
+	}
+}
+
+func TestFavSortOrderBy(t *testing.T) {
+	cases := map[string]string{
+		"":             "f.created_at DESC",
+		"recent":       "f.created_at DESC",
+		"views":        "v.views DESC",
+		"duration":     "v.duration DESC",
+		"title":        "v.title COLLATE NOCASE ASC",
+		"unknown":      "f.created_at DESC",
+		"; DROP TABLE": "f.created_at DESC",
+	}
+
+	for input, want := range cases {
+		if got := favSortOrderBy(input); got != want {
+			t.Fatalf("favSortOrderBy(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

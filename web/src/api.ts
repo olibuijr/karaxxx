@@ -1,4 +1,14 @@
-import type { BrowseParams, BrowseResponse, ChangelogInfo, CrawlProgress, ProfileSettings, SearchSuggestResponse, Video, VideoSocial } from './types'
+import type {
+  BrowseParams,
+  BrowseResponse,
+  ChangelogInfo,
+  CrawlProgress,
+  FavoriteSort,
+  ProfileSettings,
+  SearchSuggestResponse,
+  Video,
+  VideoSocial,
+} from './types'
 
 const BASE = '/api'
 
@@ -49,6 +59,16 @@ export async function fetchSearchSuggest(q: string, signal?: AbortSignal): Promi
   const res = await fetch(`${BASE}/search-suggest?q=${encodeURIComponent(q)}`, { signal })
   if (!res.ok) throw new Error(`Search suggest failed: ${res.status}`)
   return res.json() as Promise<SearchSuggestResponse>
+}
+
+export async function fetchFavoriteIds(token: string, sort: FavoriteSort): Promise<string[]> {
+  const res = await fetch(`${BASE}/fav/videos?sort=${encodeURIComponent(sort)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(`Favorites failed: ${res.status}`)
+
+  const data: unknown = await res.json()
+  return Array.isArray(data) ? data.filter((id): id is string => typeof id === 'string') : []
 }
 
 export async function triggerCrawl(): Promise<void> {
@@ -221,4 +241,12 @@ export async function removeWatchHistory(token: string, videoId: string): Promis
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` }
   })
+}
+
+export async function clearWatchHistory(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/history/clear`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(`History clear failed: ${res.status}`)
 }

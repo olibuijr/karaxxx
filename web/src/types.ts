@@ -46,6 +46,8 @@ export interface SearchSuggestResponse {
   videos: Video[]
 }
 
+export type FavoriteSort = 'recent' | 'views' | 'duration' | 'title'
+
 export interface CrawlProgress {
   status: string
   source: string

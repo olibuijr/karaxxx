@@ -26,6 +26,7 @@ export default function Wall() {
   const [comment, setComment] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [commentError, setCommentError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!token || !username) return
@@ -40,9 +41,12 @@ export default function Wall() {
     e.preventDefault()
     if (!token || !username || !comment.trim()) return
     setBusy(true)
+    setCommentError(null)
     try {
       setData(await postWallComment(username, token, comment))
       setComment('')
+    } catch {
+      setCommentError("Couldn't post your comment.")
     } finally {
       setBusy(false)
     }
@@ -110,6 +114,7 @@ export default function Wall() {
             Post
           </button>
         </form>
+        {commentError && <p className="text-xs text-red">{commentError}</p>}
         <div className="space-y-2">
           {data.comments.length === 0 ? (
             <p className="text-xs text-muted">No wall comments yet.</p>

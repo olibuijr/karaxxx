@@ -16,10 +16,12 @@ export default function Playlists() {
   const { token, user } = useAuth()
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loading, setLoading] = useState(true)
+  const [playlistsError, setPlaylistsError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const [playlistVideos, setPlaylistVideos] = useState<Record<number, Video[]>>({})
+  const [playlistVideoErrors, setPlaylistVideoErrors] = useState<Record<number, string>>({})
   const [expLoading, setExpLoading] = useState<Record<number, boolean>>({})
   const [renaming, setRenaming] = useState<number | null>(null)
   const [renameVal, setRenameVal] = useState('')
@@ -27,12 +29,25 @@ export default function Playlists() {
   const menuRef = useRef<HTMLDivElement>(null)
 
   const fetchPlaylists = () => {
-    if (!token) { setLoading(false); return }
+    if (!token) {
+      setPlaylists([])
+      setPlaylistsError(null)
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
+    setPlaylistsError(null)
     fetch('/api/playlists', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error('Playlists failed')
+        return r.json() as Promise<Playlist[]>
+      })
       .then(setPlaylists)
-      .catch(() => {})
+      .catch(() => {
+        setPlaylists([])
+        setPlaylistsError("Couldn't load your playlists.")
+      })
       .finally(() => setLoading(false))
   }
 
@@ -89,8 +104,14 @@ export default function Playlists() {
     setExpanded(id)
     if (!playlistVideos[id]) {
       setExpLoading(prev => ({ ...prev, [id]: true }))
+      setPlaylistVideoErrors(prev => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
       try {
         const res = await fetch(`/api/playlists/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+        if (!res.ok) throw new Error('Playlist videos failed')
         const data: { id: string; title: string; slug: string; duration: number; views: number; thumb_uuid: string; preview_url: string; added_at: string; upload_date: string; source: string; categories: string; position: number }[] = await res.json()
         const vids = data.map(d => ({
           id: d.id,
@@ -113,7 +134,9 @@ export default function Playlists() {
           hls_url: '',
         }))
         setPlaylistVideos(prev => ({ ...prev, [id]: vids }))
-      } catch {}
+      } catch {
+        setPlaylistVideoErrors(prev => ({ ...prev, [id]: "Couldn't load videos." }))
+      }
       setExpLoading(prev => ({ ...prev, [id]: false }))
     }
   }
@@ -199,6 +222,8 @@ export default function Playlists() {
 
       {loading ? (
         <div className="text-center py-16 text-muted">Loading...</div>
+      ) : playlistsError ? (
+        <div className="text-center py-16 text-muted">{playlistsError}</div>
       ) : playlists.length === 0 ? (
         <div className="text-center py-16 text-muted">
           No playlists yet. Create one to start organizing videos.
@@ -279,6 +304,8 @@ export default function Playlists() {
                 <div className="border-t border-border p-3">
                   {expLoading[pl.id] ? (
                     <div className="text-center py-8 text-muted text-xs">Loading videos...</div>
+                  ) : playlistVideoErrors[pl.id] ? (
+                    <div className="text-center py-8 text-muted text-xs">{playlistVideoErrors[pl.id]}</div>
                   ) : !playlistVideos[pl.id] || playlistVideos[pl.id].length === 0 ? (
                     <div className="text-center py-8 text-muted text-xs">No videos in this playlist</div>
                   ) : (

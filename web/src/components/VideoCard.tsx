@@ -1,11 +1,13 @@
 import { useRef, useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { Video } from '../types'
 import { formatDuration, formatViews, timeAgo } from '../api'
 import FavoriteButton from './FavoriteButton'
+import { toggleCategoryParam } from '../lib/categories'
 
 export default function VideoCard({ video }: { video: Video }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const isNotXnxx = video.source && video.source !== 'xnxx'
   const sourceBadge: Record<string, { label: string; color: string }> = {
     xhamster: { label: 'XH', color: 'bg-orange text-black' },
@@ -41,6 +43,15 @@ export default function VideoCard({ video }: { video: Video }) {
       v.classList.remove('playing')
     }
   }, [])
+
+  const navigateToCategory = useCallback((category: string) => {
+    const params = new URLSearchParams(location.search)
+    const nextCategories = toggleCategoryParam(params.get('cat'), category)
+    if (nextCategories) params.set('cat', nextCategories)
+    else params.delete('cat')
+    const qs = params.toString()
+    navigate(qs ? `/?${qs}` : '/', { viewTransition: true })
+  }, [location.search, navigate])
 
   return (
     <Link viewTransition
@@ -135,7 +146,7 @@ export default function VideoCard({ video }: { video: Video }) {
                 onClick={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  navigate(`/?cat=${encodeURIComponent(cat)}`, { viewTransition: true })
+                  navigateToCategory(cat)
                 }}
                 className={`text-[10px] px-1.5 py-px rounded-full font-semibold capitalize cursor-pointer
                             border border-transparent transition-colors

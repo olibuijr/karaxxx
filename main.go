@@ -195,6 +195,8 @@ type jwtPayload struct {
 	Iat int64  `json:"iat"`
 }
 
+type requestIDContextKey struct{}
+
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -1155,6 +1157,10 @@ func normalizeCategoryList(values []string) []string {
 	return normalized
 }
 
+func parseCategoryFilter(raw string) []string {
+	return normalizeCategoryList(strings.Split(raw, ","))
+}
+
 func mergeCategoryLists(lists ...[]string) []string {
 	merged := []string{}
 	seen := map[string]bool{}
@@ -1255,6 +1261,26 @@ func cachedCount(key string, query string, args ...any) int {
 	}
 	countCacheMu.Unlock()
 	return n
+}
+
+func newRequestID() string {
+	var buf [4]byte
+	if _, err := crand.Read(buf[:]); err != nil {
+		return "00000000"
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+func reqLogf(r *http.Request, format string, args ...any) {
+	reqID := "-"
+	if r != nil {
+		if value := r.Context().Value(requestIDContextKey{}); value != nil {
+			if id, ok := value.(string); ok && id != "" {
+				reqID = id
+			}
+		}
+	}
+	log.Printf("req_id=%s "+format, append([]any{reqID}, args...)...)
 }
 
 func initInviteDB() {
@@ -1381,9 +1407,11 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		start := time.Now()
+		reqID := newRequestID()
+		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, reqID))
 		rw := &responseWriter{ResponseWriter: w, statusCode: 200}
 		next.ServeHTTP(rw, r)
-		log.Printf("[%s] %s %s %d %s", r.Method, r.URL.Path, r.RemoteAddr, rw.statusCode, time.Since(start))
+		log.Printf("req_id=%s method=%s path=%s remote=%s status=%d dur_ms=%.3f", reqID, r.Method, r.URL.Path, r.RemoteAddr, rw.statusCode, float64(time.Since(start))/float64(time.Millisecond))
 	})
 }
 
@@ -1898,7 +1926,9 @@ func handleFavVideos(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unauthorized"}`, 401)
 		return
 	}
-	rows, err := db.Query("SELECT video_id FROM favorites WHERE user_id = ? ORDER BY created_at DESC", uid)
+	sort := r.URL.Query().Get("sort")
+	orderBy := favSortOrderBy(sort)
+	rows, err := db.Query("SELECT f.video_id FROM favorites f JOIN videos v ON v.id = f.video_id WHERE f.user_id = ? ORDER BY "+orderBy, uid)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -1911,6 +1941,19 @@ func handleFavVideos(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 	json.NewEncoder(w).Encode(ids)
+}
+
+func favSortOrderBy(sort string) string {
+	switch sort {
+	case "views":
+		return "v.views DESC"
+	case "duration":
+		return "v.duration DESC"
+	case "title":
+		return "v.title COLLATE NOCASE ASC"
+	default:
+		return "f.created_at DESC"
+	}
 }
 
 func handleFavCategory(w http.ResponseWriter, r *http.Request) {
@@ -2064,6 +2107,8 @@ func initRoutes() {
 				handleAPITags(w, r)
 			case strings.HasPrefix(r.URL.Path, "/api/watch/"):
 				handleWatchRouter(w, r)
+			case r.URL.Path == "/api/history/clear":
+				handleHistoryClear(w, r)
 			case r.URL.Path == "/api/watch-later":
 				handleWatchLaterList(w, r)
 			case strings.HasPrefix(r.URL.Path, "/api/watch-later/"):
@@ -2132,6 +2177,7 @@ func initRoutes() {
 	http.HandleFunc("/api/related/", handleAPIRelated)
 	http.HandleFunc("/api/tags", handleAPITags)
 	http.HandleFunc("/api/watch/", handleWatchRouter)
+	http.HandleFunc("/api/history/clear", handleHistoryClear)
 	http.HandleFunc("/api/watch-later", handleWatchLaterList)
 	http.HandleFunc("/api/watch-later/", handleWatchLaterRouter)
 	http.HandleFunc("/api/playlists", handlePlaylistListCreate)
@@ -2367,11 +2413,23 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	var rows *sql.Rows
 	var err error
-	normalizedCat := normalizeCategoryTerm(cat)
-	if normalizedCat != "" {
+	cats := parseCategoryFilter(cat)
+	if len(cats) == 1 {
 		rows, err = db.Query(
 			"SELECT videos.id, videos.slug, videos.title, videos.description, videos.categories, videos.duration, videos.views, videos.thumb_uuid, videos.preview_url, videos.added_at, videos.upload_date, videos.source FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ? ORDER BY "+order+" LIMIT ? OFFSET ?",
-			normalizedCat, perPage, (page-1)*perPage)
+			cats[0], perPage, (page-1)*perPage)
+	} else if len(cats) >= 2 {
+		// Multiple categories use AND semantics: every returned video must match all requested categories.
+		placeholders := make([]string, len(cats))
+		args := make([]any, 0, len(cats)+3)
+		for i, cat := range cats {
+			placeholders[i] = "?"
+			args = append(args, cat)
+		}
+		args = append(args, len(cats), perPage, (page-1)*perPage)
+		rows, err = db.Query(
+			"SELECT videos.id, videos.slug, videos.title, videos.description, videos.categories, videos.duration, videos.views, videos.thumb_uuid, videos.preview_url, videos.added_at, videos.upload_date, videos.source FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category IN ("+strings.Join(placeholders, ",")+") GROUP BY videos.id HAVING COUNT(DISTINCT vc.category) = ? ORDER BY "+order+" LIMIT ? OFFSET ?",
+			args...)
 	} else {
 		rows, err = db.Query(
 			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos ORDER BY "+order+" LIMIT ? OFFSET ?",
@@ -2404,8 +2462,17 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var count int
-	if normalizedCat != "" {
-		count = cachedCount("cat_count:"+normalizedCat, "SELECT COUNT(*) FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ?", normalizedCat)
+	if len(cats) == 1 {
+		count = cachedCount("cat_count:"+strings.Join(cats, ","), "SELECT COUNT(*) FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ?", cats[0])
+	} else if len(cats) >= 2 {
+		placeholders := make([]string, len(cats))
+		args := make([]any, 0, len(cats)+1)
+		for i, cat := range cats {
+			placeholders[i] = "?"
+			args = append(args, cat)
+		}
+		args = append(args, len(cats))
+		count = cachedCount("cat_count:"+strings.Join(cats, ","), "SELECT COUNT(*) FROM (SELECT videos.id FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category IN ("+strings.Join(placeholders, ",")+") GROUP BY videos.id HAVING COUNT(DISTINCT vc.category) = ?)", args...)
 	} else {
 		count = cachedCount("videos_total", "SELECT COUNT(*) FROM videos")
 	}
