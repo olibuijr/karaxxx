@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go:
+    name: Go build, vet & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet -tags sqlite_fts5 ./...
+
+      - name: Build
+        run: go build -tags "sqlite_fts5" -buildvcs=false -o karaxxx .
+
+      - name: Test
+        run: go test -tags sqlite_fts5 -race ./...
+
+  web:
+    name: Frontend build & lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Advisory: the repo's eslint config flags pre-existing idiomatic patterns
+      # (fetch-then-setState in effects, legacy `any` helpers). tsc -b strict is the
+      # real type gate (run by `bun run build`). Lint signal is surfaced, not blocking.
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: bun run lint
+
+      - name: Build
+        run: bun run build

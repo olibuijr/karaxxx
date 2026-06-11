@@ -106,3 +106,17 @@ func handleWatchRouter(w http.ResponseWriter, r *http.Request) {
 
 	http.Error(w, "method not allowed", 405)
 }
+
+func handleHistoryClear(w http.ResponseWriter, r *http.Request) {
+	uid, _, ok := authMiddleware(w, r)
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, 401)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	db.Exec("DELETE FROM watch_history WHERE user_id = ?", uid)
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}

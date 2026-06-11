@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { useLocation, useNavigate } from 'react-router-dom'
 import { fetchSearchSuggest, formatDuration } from '../api'
 import type { SearchSuggestResponse, Video } from '../types'
+import { toggleCategoryParam } from '../lib/categories'
 
 type SearchDropdownVariant = 'desktop' | 'mobile'
 
@@ -136,7 +137,12 @@ export default function SearchDropdown({
 
   function activateAction(action: SearchAction) {
     if (action.type === 'category') {
-      navigate(`/?cat=${encodeURIComponent(action.category.name)}`, { viewTransition: true })
+      const params = new URLSearchParams(location.search)
+      const nextCategories = toggleCategoryParam(params.get('cat'), action.category.name)
+      if (nextCategories) params.set('cat', nextCategories)
+      else params.delete('cat')
+      const qs = params.toString()
+      navigate(qs ? `/?${qs}` : '/', { viewTransition: true })
       closeDropdown()
       return
     }

@@ -8,8 +8,21 @@ import CategoryIcon from './CategoryIcon'
 import FilterSelect from './FilterSelect'
 import BrandLogo from './BrandLogo'
 import SearchDropdown from './SearchDropdown'
+import { parseCategories, toggleCategoryParam } from '../lib/categories'
 
 type Sort = 'recent' | 'new' | 'views' | 'duration'
+
+const SORT_VALUES: Sort[] = ['recent', 'new', 'views', 'duration']
+
+function readStoredPreference(key: string): string | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [cats, setCats] = useState<string[]>([])
@@ -18,9 +31,19 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const [tags, setTags] = useState<TagCount[]>([])
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [sp] = useSearchParams()
-  const curCat = sp.get('cat') || ''
-  const curSort = (sp.get('sort') as Sort) || 'recent'
-  const curSource = sp.get('source') || ''
+  const curCats = parseCategories(sp.get('cat'))
+  const hasSortParam = sp.has('sort')
+  const sortParam = sp.get('sort')
+  const storedSort = readStoredPreference('kxxx_sort')
+  const curSort = hasSortParam
+    ? (SORT_VALUES.includes((sortParam ?? 'recent') as Sort) ? (sortParam as Sort) : 'recent')
+    : (SORT_VALUES.includes((storedSort ?? 'recent') as Sort) ? (storedSort as Sort) : 'recent')
+  const hasSourceParam = sp.has('source')
+  const sourceParam = sp.get('source')
+  const storedSource = readStoredPreference('kxxx_source') ?? ''
+  const curSource = hasSourceParam
+    ? (SOURCES.some((source) => source.value === (sourceParam ?? '')) ? (sourceParam ?? '') : '')
+    : (SOURCES.some((source) => source.value === storedSource) ? storedSource : '')
   const { token } = useAuth()
 
   interface SuggestionGroup {
@@ -84,12 +107,41 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     }
   }, [token, pinnedCats])
 
-  const makeHref = (cat?: string, s?: Sort, src?: string) => {
-    const p = new URLSearchParams()
-    if (cat) p.set('cat', cat)
-    if (s && s !== 'recent') p.set('sort', s)
-    if (src) p.set('source', src)
-    if (!cat && curSort !== 'recent' && !s) p.set('sort', curSort)
+  const makeHref = (options?: {
+    category?: string | null
+    sort?: Sort
+    source?: string | null
+  }) => {
+    const p = new URLSearchParams(sp)
+
+    if (options?.category !== undefined) {
+      if (options.category === null) {
+        p.delete('cat')
+      } else {
+        const nextCategories = toggleCategoryParam(p.get('cat'), options.category)
+        if (nextCategories) p.set('cat', nextCategories)
+        else p.delete('cat')
+      }
+    }
+
+    if (options?.sort !== undefined) {
+      if (options.sort === 'recent') {
+        if (!hasSortParam && curSort !== 'recent') p.set('sort', 'recent')
+        else p.delete('sort')
+      } else {
+        p.set('sort', options.sort)
+      }
+    }
+
+    if (options?.source !== undefined) {
+      if (!options.source) {
+        if (!hasSourceParam && curSource) p.set('source', '')
+        else p.delete('source')
+      } else {
+        p.set('source', options.source)
+      }
+    }
+
     const qs = p.toString()
     return qs ? `/?${qs}` : '/'
   }
@@ -107,10 +159,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const catLink = (c: string, isPinned: boolean) => (
     <Link viewTransition
       key={c}
-      to={makeHref(c)}
+      to={makeHref({ category: c })}
       onClick={onClose}
       className={`group px-3 py-1.5 rounded-md text-sm font-medium transition-colors capitalize flex items-center justify-between
-                  ${c === curCat
+                  ${curCats.includes(c)
                     ? 'bg-white/8 text-text'
                     : 'text-muted hover:text-text hover:bg-white/5'
                   }`}
@@ -161,8 +213,8 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <FilterSelect
           options={sorts}
           current={curSort}
-          getHref={v => makeHref(curCat || undefined, v as Sort)}
-          onOptionClick={onClose}
+          getHref={v => makeHref({ sort: v as Sort })}
+          onOptionClick={() => onClose()}
         />
       </div>
 
@@ -176,8 +228,8 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <FilterSelect
           options={SOURCES}
           current={curSource}
-          getHref={v => makeHref(curCat || undefined, undefined, v || undefined)}
-          onOptionClick={onClose}
+          getHref={v => makeHref({ source: v })}
+          onOptionClick={() => onClose()}
         />
       </div>
 
@@ -273,10 +325,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         {catsOpen && (
           <div className="flex flex-col gap-0.5">
             <Link viewTransition
-              to={makeHref()}
+              to={makeHref({ category: null })}
               onClick={onClose}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                          ${!curCat
+                          ${curCats.length === 0
                             ? 'bg-white/8 text-text'
                             : 'text-muted hover:text-text hover:bg-white/5'
                           }`}
