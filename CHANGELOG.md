@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.11] — 2026-06-11
+
+### Changed
+- Fixed mobile header logo visibility
+
 ## [0.3.10] — 2026-06-11
 
 ### Changed

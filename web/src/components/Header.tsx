@@ -66,6 +66,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
           />
         </form>
 
+        <div className="flex items-center gap-3 ml-auto">
         <button
           onClick={async () => {
             if (randomLoading) return
@@ -85,10 +86,11 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
               setRandomLoading(false)
             }
           }}
-          className="flex-shrink-0 p-2 rounded-full border border-border text-muted hover:text-text hover:border-red/40 transition-colors"
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border
+                     text-muted hover:text-text hover:border-red/40 transition-colors"
           aria-label="Random video"
-          title="Random video"
         >
+          <span className="text-xs font-medium hidden sm:inline">Surprise me!</span>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="16 3 21 3 21 8"/>
             <line x1="4" y1="20" x2="21" y2="3"/>
@@ -171,6 +173,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
             Sign in
           </button>
         )}
+        </div>
       </header>
 
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
