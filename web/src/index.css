@@ -248,10 +248,14 @@ video[data-preview].playing {
 
 .brand-logo3d--hero .brand-logo3d__word {
   font-size: clamp(4.4rem, 14vw, 7.4rem);
+  /* line-height 0.82 lets hero-scale glyphs + 3D shadows spill out of the
+     line box and overlap content below — give the hero variant real room */
+  line-height: 1;
+  margin-bottom: 0.08em;
 }
 
 .brand-logo3d--hero .brand-logo3d__tagline {
-  margin-top: 0.62em;
+  margin-top: 0.85em;
   font-size: clamp(0.95rem, 2.5vw, 1.45rem);
   color: rgb(244 244 246 / 0.72);
 }

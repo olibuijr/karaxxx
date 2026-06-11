@@ -18,7 +18,7 @@ const benefits = [
 ]
 
 const glassInput =
-  'h-10 border-white/10 bg-white/[0.04] text-text backdrop-blur-sm transition-colors focus:bg-white/[0.07] focus-visible:border-orange/40'
+  'h-10 border-white/15 bg-white/[0.07] text-text backdrop-blur-sm transition-colors focus:bg-white/[0.10] focus-visible:border-orange/40'
 
 export default function Setup() {
   const { login, register } = useAuth()
@@ -96,14 +96,14 @@ export default function Setup() {
         </section>
 
         {/* Right — Frosted glass auth card */}
-        <section className="relative rounded-2xl border border-white/10 bg-black/35 p-6 backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_24px_80px_-32px_rgba(0,0,0,0.9)] animate-in fade-in slide-in-from-bottom-6 duration-700">
+        <section className="relative rounded-2xl border border-white/15 bg-white/[0.06] p-6 backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_24px_80px_-32px_rgba(0,0,0,0.9)] animate-in fade-in slide-in-from-bottom-6 duration-700">
           {/* Specular top edge */}
           <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px rounded-t-2xl bg-gradient-to-r from-transparent via-white/30 to-transparent" />
           {/* Faint inner sheen */}
           <div aria-hidden className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-b from-white/[0.05] via-transparent to-transparent" />
 
           <div className="relative">
-            <div className="mb-5 grid grid-cols-2 rounded-lg border border-white/10 bg-white/[0.04] p-1 backdrop-blur-sm">
+            <div className="mb-5 grid grid-cols-2 rounded-lg border border-white/15 bg-white/[0.06] p-1 backdrop-blur-sm">
               <button
                 type="button"
                 onClick={() => { setMode('login'); setError('') }}
