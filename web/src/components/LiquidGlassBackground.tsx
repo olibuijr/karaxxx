@@ -106,42 +106,53 @@ export default function LiquidGlassBackground({
         vec2 centeredUv = vUv - 0.5;
         centeredUv.x *= uResolution.x / max(uResolution.y, 1.0);
 
-        float slowTime = uTime * 0.055;
-        vec2 mouseOffset = (uMouse - 0.5) * vec2(0.16, -0.16);
-        vec2 baseUv = centeredUv * 0.95 + mouseOffset;
+        float t = uTime * 0.05;
+        vec2 mouseOffset = (uMouse - 0.5) * vec2(0.12, -0.12);
+        vec2 p = centeredUv * 1.05 + mouseOffset;
 
-        vec2 warpA = vec2(
-          fbm(baseUv * 1.15 + vec2(0.0, slowTime)),
-          fbm(baseUv * 1.15 + vec2(4.3, slowTime + 2.6))
+        // Draped satin: slow fbm warps the fold axis so crimson highlights
+        // drift like silk under a spotlight
+        vec2 warp = vec2(
+          fbm(p * 1.2 + vec2(0.0, t)),
+          fbm(p * 1.2 + vec2(3.7, t * 0.8))
         );
+        float foldPhase = p.y * 2.4 + p.x * 0.8 + warp.y * 3.2 + warp.x * 1.8 + t * 0.5;
+        float folds = sin(foldPhase * 2.6);
+        float sheen = pow(0.5 + 0.5 * folds, 3.5);
+        float foldShadow = pow(0.5 - 0.5 * folds, 2.0);
+        float drift = clamp(fbm(p * 0.8 + warp * 0.6) + 0.5, 0.0, 1.0);
 
-        vec2 warpB = vec2(
-          fbm(baseUv * 2.0 + warpA * 1.4 + vec2(slowTime * 0.7, 1.7)),
-          fbm(baseUv * 2.0 - warpA * 1.2 + vec2(-2.1, slowTime * 0.6))
-        );
+        vec3 base = vec3(0.066, 0.048, 0.078);
+        vec3 wine = vec3(0.38, 0.045, 0.10);
+        vec3 crimson = vec3(0.898, 0.035, 0.078);
+        vec3 hotPink = vec3(1.0, 0.22, 0.42);
+        vec3 amber = vec3(0.976, 0.451, 0.086);
 
-        vec2 flowUv = baseUv + (warpA - 0.5) * 0.85 + (warpB - 0.5) * 0.45;
-        float field = fbm(flowUv * 1.1 + warpB * 0.7 - slowTime * 0.45);
-        float ridges = 1.0 - abs(field * 2.0 - 1.0);
-        float caustic = pow(clamp(ridges, 0.0, 1.0), 2.0);
-        float secondary = pow(clamp(fbm(flowUv * 1.9 - warpA * 0.8 + slowTime * 0.35) * 0.5 + 0.5, 0.0, 1.0), 4.0);
-        float sparkle = pow(clamp(1.0 - abs(fbm(flowUv * 4.5 + warpB * 1.2 + slowTime * 0.2)), 0.0, 1.0), 10.0);
+        vec3 color = mix(base, wine, 0.10 + 0.32 * drift);
+        color += crimson * sheen * 0.24;
+        color += hotPink * sheen * sheen * 0.07;
+        color *= 1.0 - foldShadow * 0.35;
 
-        // Dark gray-violet base — layered grays, never pitch black
-        vec3 baseColor = vec3(0.098, 0.098, 0.133);
-        vec3 redGlow = vec3(0.898, 0.035, 0.078);
-        vec3 orangeGlow = vec3(0.976, 0.451, 0.086);
-        vec3 whiteSpec = vec3(1.0);
+        // Bokeh: drifting out-of-focus club lights in warm reds and pinks
+        for (int i = 0; i < 7; i++) {
+          float fi = float(i);
+          vec2 seed = hash2(vec2(fi * 1.61, fi * 2.71));
+          vec2 center = (seed - 0.5) * vec2(2.1, 1.25);
+          center.x += sin(t * (0.35 + seed.y * 0.5) + fi * 1.7) * 0.38;
+          center.y += cos(t * (0.28 + seed.x * 0.4) + fi * 2.3) * 0.24;
+          float d = length(centeredUv - center);
+          float radius = 0.05 + seed.x * 0.11;
+          float orb = smoothstep(radius, radius * 0.2, d);
+          float rim = smoothstep(radius, radius * 0.82, d) - smoothstep(radius * 0.82, radius * 0.55, d);
+          vec3 orbColor = mix(crimson, mix(hotPink, amber, seed.x), seed.y);
+          color += orbColor * orb * (0.085 + seed.y * 0.075);
+          color += orbColor * rim * 0.05;
+        }
 
-        vec3 color = baseColor;
-        color += redGlow * caustic * 0.30;
-        color += orangeGlow * secondary * 0.22;
-        color += whiteSpec * sparkle * 0.06;
+        float vignette = smoothstep(0.95, 0.22, length(centeredUv * vec2(0.88, 1.0)));
+        color *= 0.68 + vignette * 0.32;
 
-        float vignette = smoothstep(0.86, 0.18, length(centeredUv * vec2(0.92, 1.02)));
-        color *= 0.80 + vignette * 0.20;
-
-        color = clamp(color, vec3(0.0), vec3(0.45));
+        color = clamp(color, vec3(0.0), vec3(0.40));
 
         gl_FragColor = vec4(color, 1.0);
       }

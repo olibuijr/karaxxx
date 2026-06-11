@@ -46,8 +46,8 @@ export default function VideoCard({ video }: { video: Video }) {
       to={`/play/${video.id}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      className="group flex flex-col overflow-hidden rounded-xl bg-card border border-white/[0.06]
-                 shadow-[0_1px_2px_rgba(0,0,0,0.4),0_8px_24px_-12px_rgba(0,0,0,0.5)]
+      className="group flex flex-col overflow-hidden rounded-xl bg-white/[0.04] border border-white/10
+                 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_2px_rgba(0,0,0,0.4),0_8px_24px_-12px_rgba(0,0,0,0.5)]
                  hover:border-orange/30 hover:-translate-y-1
                  hover:shadow-[0_0_0_1px_rgba(249,115,22,0.15),0_12px_40px_-8px_rgba(0,0,0,0.7)]
                  active:scale-[0.975] transition-all duration-200"

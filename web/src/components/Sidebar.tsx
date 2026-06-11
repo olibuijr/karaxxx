@@ -134,7 +134,8 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
   const sidebar = (
     <aside className="w-56 flex-shrink-0 h-[calc(100vh-3.5rem)] overflow-y-auto
-                       bg-card/50 backdrop-blur-sm border-r border-white/5 flex flex-col
+                       bg-white/[0.04] backdrop-blur-2xl border-r border-white/10 flex flex-col
+                       shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]
                        scrollbar-thin">
       {/* Branding */}
       <div className="hidden lg:block px-4 pt-4 pb-3 border-b border-border mx-3 mb-2">

@@ -33,8 +33,8 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
   return (
     <>
       <header className="flex items-center gap-3 py-2.5
-                        bg-bg/80 backdrop-blur-xl border-b border-white/5
-                        shadow-[0_1px_0_rgba(255,255,255,0.03),0_8px_24px_-12px_rgba(0,0,0,0.6)]
+                        bg-bg/60 backdrop-blur-2xl border-b border-white/10
+                        shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_24px_-12px_rgba(0,0,0,0.6)]
                         sticky top-0 z-50 md:py-3">
         {onMenuToggle && (
           <button onClick={onMenuToggle}

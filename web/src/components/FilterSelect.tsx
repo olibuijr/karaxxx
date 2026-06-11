@@ -28,7 +28,7 @@ export default function FilterSelect({
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium
-                   bg-white/5 text-text hover:bg-white/10 transition-colors capitalize"
+                   bg-white/5 border border-white/10 text-text hover:bg-white/10 transition-colors capitalize"
       >
         <span>{options.find(o => o.value === current)?.label || options[0].label}</span>
         <svg className={`w-3.5 h-3.5 text-muted transition-transform ${open ? 'rotate-180' : ''}`}
@@ -38,7 +38,8 @@ export default function FilterSelect({
       </button>
       {open && (
         <div className="absolute left-0 right-0 top-full mt-1 z-50 py-1 rounded-lg
-                        bg-card border border-border shadow-card">
+                        bg-[#1b1b26]/90 backdrop-blur-xl border border-white/10
+                        shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_48px_-16px_rgba(0,0,0,0.8)]">
           {options.map(o => (
             <Link
               key={o.value}
