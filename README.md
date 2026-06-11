@@ -74,6 +74,22 @@ Signup requires an invite key. The raw key is printed once and only its SHA-256 
 ./karaxxx invite revoke kxxx_...
 ```
 
+## Operations
+
+Always use `./deploy.sh deploy [version]` for production releases. The script builds the Go binary and React app, updates `VERSION` and `CHANGELOG.md`, pushes release metadata, verifies `karaxxx.service`, restarts it with systemd, and waits for `/api/health` to answer before declaring the deploy complete.
+
+SQLite remains the production database. It runs in WAL mode with `synchronous=NORMAL`, a 5s busy timeout, and an 8-connection Go pool so reads are not serialized behind crawler writes. `/api/health` is intentionally lightweight: it returns readiness immediately and only adds DB metrics when they can be collected quickly. Consider Postgres only if the app grows into sustained multi-writer workload, cross-instance serving, or heavier analytics.
+
+Background scraping is deliberately bounded for service health:
+
+- Missing-media backfill does not run on startup.
+- Backfill runs every 30 minutes and checks at most 12 videos per run.
+- Failed scrape retries run every 15 minutes.
+- Expiring token pre-warm runs every 20 minutes and caps each pass at 50 videos.
+- Manual crawl endpoints still trigger provider crawls on demand.
+
+Browse/recommendation queries filter out rows without playable media. Playback and `/api/video/{id}` refresh stale provider tokens on demand, and repeated no-media failures are pruned after the retry threshold. SSE progress should report `idle` when no crawl/backfill is active; the UI only shows `scraping X/Y` when a positive detail total is present.
+
 ## API Endpoints
 
 ### Browse & Search
