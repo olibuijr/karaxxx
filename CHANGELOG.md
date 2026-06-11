@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.16] — 2026-06-11
+
+### Changed
+- Sexy satin login background (draped silk folds + warm bokeh) replacing smoke effect
+- Removed logo hover wobble
+- Sitewide glass UI: header, sidebar, video cards, dialogs, filters, pagination
+
 ## [0.3.15] — 2026-06-11
 
 ### Changed
