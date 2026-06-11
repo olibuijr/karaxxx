@@ -25,7 +25,8 @@ function AppLayout() {
     if (!user) return
     const unsub = subscribeProgress(p => {
       if (p.total_count) setCount(p.total_count)
-      if (p.status !== 'idle') {
+      const active = !!p.status && p.status !== 'idle' && (p.status !== 'scraping' || p.detail_total > 0)
+      if (active) {
         const msg = p.status === 'searching'
           ? `scanning page ${p.page} (${p.scanned} found)`
           : `scraping ${p.detail_done}/${p.detail_total}`

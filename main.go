@@ -1516,6 +1516,11 @@ func refreshExpiring() {
 // --- Progress / SSE ---
 
 func setProgress(source, status string, scanned, newVideos, cached, detailDone, detailTotal, page int) {
+	if status == "" || (status == "scraping" && detailTotal <= 0) {
+		status = "idle"
+		detailDone = 0
+		detailTotal = 0
+	}
 	progress.mu.Lock()
 	progress.Status = status
 	progress.Source = source
@@ -1532,6 +1537,11 @@ func getProgressJSON() []byte {
 	progress.mu.RLock()
 	p := progress
 	progress.mu.RUnlock()
+	if p.Status == "" || (p.Status == "scraping" && p.DetailTotal <= 0) {
+		p.Status = "idle"
+		p.DetailDone = 0
+		p.DetailTotal = 0
+	}
 	var total int
 	db.QueryRow("SELECT COUNT(*) FROM videos").Scan(&total)
 	p.TotalCount = total
@@ -4136,10 +4146,8 @@ func scrapeNewVideoDetails() {
 	}
 
 	bgWg.Add(1)
-	progress.mu.Lock()
-	progress.Status = "scraping"
-	progress.DetailTotal += len(pendingList)
-	progress.mu.Unlock()
+	defer bgWg.Done()
+	setProgress("backfill", "scraping", 0, len(pendingList), 0, 0, len(pendingList), 0)
 
 	log.Printf("Scraping details for %d videos (max %d concurrent)...", len(pendingList), scrapeWorkers)
 	var wg sync.WaitGroup
@@ -4179,14 +4187,9 @@ func scrapeNewVideoDetails() {
 		}(p.id, p.source)
 	}
 	wg.Wait()
-	bgWg.Done()
 	log.Printf("Background detail scraping complete (%d videos)", len(pendingList))
 
-	progress.mu.Lock()
-	if progress.Scanned == 0 {
-		progress.Status = "idle"
-	}
-	progress.mu.Unlock()
+	setProgress("backfill", "idle", 0, 0, 0, 0, 0, 0)
 }
 
 // --- HTTP helpers ---

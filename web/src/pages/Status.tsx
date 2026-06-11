@@ -53,7 +53,7 @@ export default function Status() {
     fetch('/api/crawl-dt').catch(() => {})
   }
 
-  const isActive = !!(progress && progress.status !== 'idle')
+  const isActive = !!(progress?.status && progress.status !== 'idle' && (progress.status !== 'scraping' || progress.detail_total > 0))
 
   return (
     <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-6">
