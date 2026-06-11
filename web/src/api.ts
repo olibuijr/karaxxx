@@ -1,4 +1,4 @@
-import type { BrowseParams, BrowseResponse, ChangelogInfo, CrawlProgress, ProfileSettings, Video, VideoSocial } from './types'
+import type { BrowseParams, BrowseResponse, ChangelogInfo, CrawlProgress, ProfileSettings, SearchSuggestResponse, Video, VideoSocial } from './types'
 
 const BASE = '/api'
 
@@ -30,18 +30,25 @@ export async function fetchBrowse(params: BrowseParams): Promise<BrowseResponse>
   }
   const res = await fetch(`${BASE}/browse${qs ? '?' + qs : ''}`)
   if (!res.ok) throw new Error(`Browse failed: ${res.status}`)
-  return res.json()
+  return res.json() as Promise<BrowseResponse>
 }
 
 export async function fetchVideo(id: string): Promise<Video> {
   const res = await fetch(`${BASE}/video/${id}`)
   if (!res.ok) throw new Error(`Video ${id} not found`)
-  return res.json()
+  return res.json() as Promise<Video>
 }
 
 export async function fetchCategories(): Promise<string[]> {
   const res = await fetch(`${BASE}/categories`)
-  return res.json()
+  if (!res.ok) throw new Error(`Categories failed: ${res.status}`)
+  return res.json() as Promise<string[]>
+}
+
+export async function fetchSearchSuggest(q: string, signal?: AbortSignal): Promise<SearchSuggestResponse> {
+  const res = await fetch(`${BASE}/search-suggest?q=${encodeURIComponent(q)}`, { signal })
+  if (!res.ok) throw new Error(`Search suggest failed: ${res.status}`)
+  return res.json() as Promise<SearchSuggestResponse>
 }
 
 export async function triggerCrawl(): Promise<void> {

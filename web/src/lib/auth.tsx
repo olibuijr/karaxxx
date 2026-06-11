@@ -10,6 +10,11 @@ interface AuthResult {
   error?: string
 }
 
+interface AuthPayload {
+  token?: string
+  user?: User
+}
+
 interface AuthContextType {
   user: User | null
   token: string | null
@@ -47,31 +52,47 @@ function readCachedUser(): User | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   // Optimistic session restore: trust the cached user immediately, revalidate in background.
   const [user, setUser] = useState<User | null>(readCachedUser)
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('kxxx_token'))
+  const [token, setToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => readCachedUser() === null)
 
   useEffect(() => {
-    const t = localStorage.getItem('kxxx_token')
-    const headers = t ? { Authorization: `Bearer ${t}` } : undefined
-    fetch('/api/auth/me', { headers })
-      .then(r => r.ok ? r.json() : null)
-      .then(u => {
-        if (u?.username) {
-          setUser(u)
-          localStorage.setItem(USER_CACHE_KEY, JSON.stringify(u))
-          if (t) setToken(t)
-        } else {
-          // Revalidation failed — evict the optimistic session.
-          localStorage.removeItem('kxxx_token')
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+        const response = await fetch('/api/auth/me', { headers })
+        if (!response.ok) {
           localStorage.removeItem(USER_CACHE_KEY)
           setToken(null)
-          withViewTransition(() => setUser(null))
+          if (!cancelled) withViewTransition(() => setUser(null))
+          return
         }
-      })
-      .catch(() => {
+
+        const data = await response.json() as User
+        if (cancelled) return
+
+        if (data.username) {
+          setUser(data)
+          localStorage.setItem(USER_CACHE_KEY, JSON.stringify(data))
+          return
+        }
+
+        localStorage.removeItem(USER_CACHE_KEY)
+        setToken(null)
+        withViewTransition(() => setUser(null))
+      } catch {
         // Network error: keep the optimistic session; the API layer will surface real failures.
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const authRequest = useCallback(async (path: string, body: object) => {
@@ -80,13 +101,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) return { ok: false, error: data?.error || 'Authentication failed' }
-    localStorage.setItem('kxxx_token', data.token)
-    localStorage.setItem(USER_CACHE_KEY, JSON.stringify(data.user))
-    setToken(data.token)
+    if (!res.ok) return { ok: false, error: 'Authentication failed' }
+    const data = await res.json() as AuthPayload
+    const { token: authToken, user: authUser } = data
+    if (!authToken || !authUser) return { ok: false, error: 'Authentication failed' }
+    localStorage.setItem(USER_CACHE_KEY, JSON.stringify(authUser))
+    setToken(authToken)
     // Melt the login screen into the app shell in one continuous transition.
-    withViewTransition(() => setUser(data.user))
+    withViewTransition(() => setUser(authUser))
     return { ok: true }
   }, [])
 
@@ -98,7 +120,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
-    localStorage.removeItem('kxxx_token')
     localStorage.removeItem(USER_CACHE_KEY)
     setToken(null)
     withViewTransition(() => setUser(null))

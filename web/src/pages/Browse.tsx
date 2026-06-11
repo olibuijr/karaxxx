@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import VideoCard from '../components/VideoCard'
 import VideoCardSkeleton from '../components/VideoCardSkeleton'
 import FilterSelect from '../components/FilterSelect'
-import { fetchBrowse, subscribeProgress } from '../api'
+import { fetchBrowse, fetchCategories, subscribeProgress } from '../api'
 import type { Video, CrawlProgress, BrowseParams } from '../types'
 import { SOURCES } from '../types'
 import { useAuth } from '../lib/auth'
@@ -22,6 +22,11 @@ export default function Browse() {
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [browseError, setBrowseError] = useState<string | null>(null)
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
+  const [categoryOptions, setCategoryOptions] = useState<{ label: string; value: string }[]>([
+    { label: 'All categories', value: '' },
+  ])
   const gridRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<(() => void) | undefined>(undefined)
@@ -51,11 +56,27 @@ export default function Browse() {
   const filters = `${sort}|${cat}|${q}|${uploader}|${sourceFilter}`
 
   useEffect(() => {
+    fetchCategories()
+      .then((categories) => {
+        setCategoryOptions([
+          { label: 'All categories', value: '' },
+          ...categories.map((name) => ({ label: name, value: name })),
+        ])
+      })
+      .catch(() => {
+        setCategoryOptions([{ label: 'All categories', value: '' }])
+      })
+  }, [])
+
+  useEffect(() => {
     if (!token) { setHistory([]); return }
     fetch(`/api/watch/history?limit=8`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then(r => r.ok ? r.json() : [])
+      .then((response) => {
+        if (!response.ok) return [] as Video[]
+        return response.json() as Promise<Video[]>
+      })
       .then(setHistory)
       .catch(() => setHistory([]))
   }, [token])
@@ -75,6 +96,8 @@ export default function Browse() {
     setTotalPages(0)
     setTotalCount(0)
     setLoading(true)
+    setBrowseError(null)
+    setLoadMoreError(null)
     busyRef.current = false
     fetchBrowse({ page: 1, sort: sort as BrowseParams['sort'], cat, q, uploader, source: sourceFilter || undefined })
       .then(d => {
@@ -82,6 +105,10 @@ export default function Browse() {
         setPage(1)
         setTotalPages(d.total_pages)
         setTotalCount(d.count)
+      })
+      .catch(() => {
+        setVideos([])
+        setBrowseError('Could not load videos right now.')
       })
       .finally(() => setLoading(false))
   }, [filters])
@@ -92,7 +119,10 @@ export default function Browse() {
     fetch(`/api/for-you`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then(r => r.ok ? r.json() : [])
+      .then((response) => {
+        if (!response.ok) return [] as Video[]
+        return response.json() as Promise<Video[]>
+      })
       .then(setForYouVideos)
       .catch(() => setForYouVideos([]))
       .finally(() => setForYouLoading(false))
@@ -102,12 +132,16 @@ export default function Browse() {
     if (busyRef.current || page >= totalPages) return
     busyRef.current = true
     setLoadingMore(true)
+    setLoadMoreError(null)
     fetchBrowse({ page: page + 1, sort: sort as BrowseParams['sort'], cat, q, uploader, source: sourceFilter || undefined })
       .then(d => {
         setVideos(prev => [...prev, ...d.videos])
         setPage(d.page)
         setTotalPages(d.total_pages)
         setTotalCount(d.count)
+      })
+      .catch(() => {
+        setLoadMoreError('Could not load more videos right now.')
       })
       .finally(() => {
         setLoadingMore(false)
@@ -206,6 +240,14 @@ export default function Browse() {
     return `/?${qs}`
   }
 
+  const categoryHref = (value: string) => {
+    const p = new URLSearchParams(sp)
+    if (value === '') p.delete('cat')
+    else p.set('cat', value)
+    const qs = p.toString()
+    return qs ? `/?${qs}` : '/'
+  }
+
   const sources = SOURCES
 
   return (
@@ -213,6 +255,10 @@ export default function Browse() {
       {label && <div className="px-3 py-1 text-xs text-muted md:px-6">{label}</div>}
 
       <div className="flex items-center gap-2 px-2.5 py-2 md:px-6">
+        <div className="w-32">
+          <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Category</span>
+          <FilterSelect options={categoryOptions} current={cat} getHref={categoryHref} />
+        </div>
         <div className="w-32">
           <span className="text-[11px] font-semibold text-muted/70 uppercase tracking-widest mb-1 block">Sort</span>
           <FilterSelect options={sorts} current={sort} getHref={sortHref} />
@@ -277,7 +323,7 @@ export default function Browse() {
 
       {!showLoading && showVideos.length === 0 && (
         <div className="text-center py-16 text-muted">
-          {q ? `No results for "${q}".` : uploader ? `No videos for ${uploader}.` : 'No videos yet.'}
+          {browseError ?? (q ? `No results for "${q}".` : uploader ? `No videos for ${uploader}.` : 'No videos yet.')}
         </div>
       )}
 
@@ -295,6 +341,10 @@ export default function Browse() {
 
       {loadingMore && (
         <div className="text-center py-6 text-muted text-sm">Loading more...</div>
+      )}
+
+      {loadMoreError && (
+        <div className="text-center py-4 text-sm text-muted">{loadMoreError}</div>
       )}
 
       {!isForYou && page >= totalPages && totalPages > 0 && (

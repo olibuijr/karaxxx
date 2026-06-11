@@ -41,6 +41,11 @@ export interface BrowseResponse {
   total_pages: number
 }
 
+export interface SearchSuggestResponse {
+  categories: { name: string; count: number }[]
+  videos: Video[]
+}
+
 export interface CrawlProgress {
   status: string
   source: string

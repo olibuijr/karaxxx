@@ -1,10 +1,11 @@
 import { useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import type { Video } from '../types'
 import { formatDuration, formatViews, timeAgo } from '../api'
 import FavoriteButton from './FavoriteButton'
 
 export default function VideoCard({ video }: { video: Video }) {
+  const navigate = useNavigate()
   const isNotXnxx = video.source && video.source !== 'xnxx'
   const sourceBadge: Record<string, { label: string; color: string }> = {
     xhamster: { label: 'XH', color: 'bg-orange text-black' },
@@ -58,7 +59,7 @@ export default function VideoCard({ video }: { video: Video }) {
             <img
               src={thumb}
               loading="lazy"
-              alt=""
+              alt={video.title}
               className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-bg/80 via-transparent to-transparent
@@ -131,13 +132,18 @@ export default function VideoCard({ video }: { video: Video }) {
             {video.categories.filter(c => c !== 'uncategorized').slice(0, 3).map((cat, i) => (
               <span
                 key={cat}
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.location.href = `/?cat=${encodeURIComponent(cat)}` }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  navigate(`/?cat=${encodeURIComponent(cat)}`, { viewTransition: true })
+                }}
                 className={`text-[10px] px-1.5 py-px rounded-full font-semibold capitalize cursor-pointer
                             border border-transparent transition-colors
                             ${i === 0
                               ? 'bg-orange/15 text-orange hover:bg-orange/25'
                               : 'bg-red/10 text-red hover:bg-red/20'
                             }`}
+                aria-label={`Filter by ${cat}`}
               >
                 {cat}
               </span>
