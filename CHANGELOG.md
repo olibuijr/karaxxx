@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.9] — 2026-06-11
+
+### Changed
+- Flattened header logo 3D effect
+
 ## [0.3.8] — 2026-06-11
 
 ### Changed
