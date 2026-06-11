@@ -17,6 +17,7 @@ export interface Video {
   url_1080: string
   preview_url: string
   hls_url: string
+  watch_count?: number
 }
 
 export interface BrowseParams {
@@ -51,4 +52,33 @@ export interface CrawlProgress {
   page: number
   total_count: number
   source_counts: Record<string, number>
+}
+
+export interface SocialComment {
+  id: number
+  display_name: string
+  body: string
+  anonymous: boolean
+  created_at: string
+}
+
+export interface VideoSocial {
+  comments: SocialComment[]
+  reactions: Record<string, number>
+  user_reactions: string[]
+  watch_count: number
+}
+
+export interface ProfileSettings {
+  username: string
+  display_name: string
+  anonymous_name: string
+  comment_anonymously: boolean
+  public_commenter_name: string
+}
+
+export interface ChangelogInfo {
+  version: string
+  updated_at: string
+  markdown: string
 }

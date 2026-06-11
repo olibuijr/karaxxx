@@ -66,8 +66,9 @@ func handleWatchRouter(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Position int `json:"position"`
-			Duration int `json:"duration,omitempty"`
+			Position int    `json:"position"`
+			Duration int    `json:"duration,omitempty"`
+			Event    string `json:"event,omitempty"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		var existsID string
@@ -76,7 +77,17 @@ func handleWatchRouter(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"video not found"}`, 404)
 			return
 		}
-		db.Exec("INSERT OR REPLACE INTO watch_history (user_id, video_id, position, duration, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
+		if body.Event == "play" {
+			incrementVideoWatch(uid, videoID)
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+		}
+		db.Exec(`INSERT INTO watch_history (user_id, video_id, position, duration, updated_at)
+				VALUES (?, ?, ?, ?, datetime('now'))
+				ON CONFLICT(user_id, video_id) DO UPDATE SET
+					position = excluded.position,
+					duration = excluded.duration,
+					updated_at = datetime('now')`,
 			uid, videoID, body.Position, body.Duration)
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		return

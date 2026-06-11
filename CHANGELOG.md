@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.2] — 2026-06-11
+
+### Changed
+- Use SQLite WAL with a real connection pool instead of serializing all DB work through one connection
+- Make /api/health a fast readiness endpoint with bounded optional DB metrics
+- Cap background missing-media backfill to 12 videos every 30 minutes and delay it until after startup
+- Slow failed-scrape retry churn to reduce service load
+
+## [0.3.1] — 2026-06-11
+
+### Changed
+- Fix startup DB profile migration blocking before the HTTP listener opened
+- Require deploy.sh to wait for systemd active plus /api/health readiness
+- Keep service lifecycle routed through systemd from deploy.sh
+
+## [0.3.0] — 2026-06-11
+
+### Changed
+- KaraXXX - Adult Playground invite-only setup screen with privacy and GitHub transparency copy
+- Hashed invite-key CLI for controlled signup
+- Provider-aware stale-token refresh and missing-media cleanup
+- Anonymous social layer with comments, reactions, watch counts, profiles, and walls
+- User-facing changelog page backed by deploy.sh release metadata
+- Hardened deploy.sh systemd validation, stop, restart, and status checks
+
 ## [0.2.0] — 2026-06-09
 
 ### Added

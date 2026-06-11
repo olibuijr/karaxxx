@@ -49,6 +49,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
                                 drop-shadow-[0_0_12px_rgba(229,9,20,0.25)]">
           <span className="brand-kara">Kara</span>
           <span className="brand-xxx">XXX</span>
+          <span className="ml-2 hidden text-sm font-semibold text-muted md:inline">Adult Playground</span>
         </Link>
 
         <form onSubmit={submit} className="flex-1 min-w-0 max-w-xl relative">
@@ -134,6 +135,12 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
                 Profile
               </DropdownMenuItem>
               <DropdownMenuItem
+                onClick={() => navigate(`/wall/${encodeURIComponent(user.username)}`)}
+                className="text-sm cursor-pointer"
+              >
+                My Wall
+              </DropdownMenuItem>
+              <DropdownMenuItem
                 onClick={() => navigate('/playlists')}
                 className="text-sm cursor-pointer"
               >
@@ -144,6 +151,12 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
                 className="text-sm cursor-pointer"
               >
                 Favorites
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => navigate('/changelog')}
+                className="text-sm cursor-pointer"
+              >
+                Changelog
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={logout}

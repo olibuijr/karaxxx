@@ -15,7 +15,9 @@ func handlePlaylistListCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
-		var body struct{ Name string `json:"name"` }
+		var body struct {
+			Name string `json:"name"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
 			http.Error(w, `{"error":"name required"}`, 400)
 			return
@@ -81,7 +83,9 @@ func handlePlaylistRouter(w http.ResponseWriter, r *http.Request) {
 
 	if subPath == "" {
 		if r.Method == "PUT" {
-			var body struct{ Name string `json:"name"` }
+			var body struct {
+				Name string `json:"name"`
+			}
 			json.NewDecoder(r.Body).Decode(&body)
 			db.Exec("UPDATE playlists SET name = ? WHERE id = ? AND user_id = ?", body.Name, pid, uid)
 			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -130,7 +134,9 @@ func handlePlaylistRouter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if subPath == "videos" && r.Method == "POST" {
-		var body struct{ VideoID string `json:"video_id"` }
+		var body struct {
+			VideoID string `json:"video_id"`
+		}
 		json.NewDecoder(r.Body).Decode(&body)
 		var maxPos int
 		db.QueryRow("SELECT COALESCE(MAX(position), -1) FROM playlist_videos WHERE playlist_id = ?", pid).Scan(&maxPos)
@@ -149,7 +155,9 @@ func handlePlaylistRouter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if subPath == "reorder" && r.Method == "PUT" {
-		var body struct{ VideoIDs []string `json:"video_ids"` }
+		var body struct {
+			VideoIDs []string `json:"video_ids"`
+		}
 		json.NewDecoder(r.Body).Decode(&body)
 		for i, vid := range body.VideoIDs {
 			db.Exec("UPDATE playlist_videos SET position = ? WHERE playlist_id = ? AND video_id = ?", i, pid, vid)
@@ -175,7 +183,9 @@ func handleRateVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "POST" {
-		var body struct{ Rating int `json:"rating"` }
+		var body struct {
+			Rating int `json:"rating"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", 400)
 			return

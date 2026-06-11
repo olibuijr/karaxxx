@@ -5,11 +5,16 @@ interface User {
   username: string
 }
 
+interface AuthResult {
+  ok: boolean
+  error?: string
+}
+
 interface AuthContextType {
   user: User | null
   token: string | null
-  login: (username: string, password: string) => Promise<boolean>
-  register: (username: string, password: string) => Promise<boolean>
+  login: (username: string, password: string) => Promise<AuthResult>
+  register: (username: string, password: string, inviteKey: string) => Promise<AuthResult>
   logout: () => void
   loading: boolean
 }
@@ -23,21 +28,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const t = localStorage.getItem('kxxx_token')
-    if (t) {
-      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(u => {
-          if (u?.username) {
-            setUser(u)
-            setToken(t)
-          } else {
-            localStorage.removeItem('kxxx_token')
-          }
-        })
-        .finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
+    const headers = t ? { Authorization: `Bearer ${t}` } : undefined
+    fetch('/api/auth/me', { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(u => {
+        if (u?.username) {
+          setUser(u)
+          if (t) setToken(t)
+        } else {
+          localStorage.removeItem('kxxx_token')
+        }
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   const authRequest = useCallback(async (path: string, body: object) => {
@@ -46,21 +48,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!res.ok) return false
-    const data = await res.json()
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) return { ok: false, error: data?.error || 'Authentication failed' }
     localStorage.setItem('kxxx_token', data.token)
     setToken(data.token)
     setUser(data.user)
-    return true
+    return { ok: true }
   }, [])
 
   const login = (username: string, password: string) =>
     authRequest('/api/auth/login', { username, password })
 
-  const register = (username: string, password: string) =>
-    authRequest('/api/auth/register', { username, password })
+  const register = (username: string, password: string, inviteKey: string) =>
+    authRequest('/api/auth/register', { username, password, invite_key: inviteKey })
 
   const logout = () => {
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
     localStorage.removeItem('kxxx_token')
     setUser(null)
     setToken(null)

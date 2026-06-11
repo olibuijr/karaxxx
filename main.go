@@ -37,27 +37,28 @@ import (
 var templateFS embed.FS
 
 var (
-	db         *sql.DB
-	tmpl       *template.Template
-	httpClient  *http.Client
-	mediaClient *http.Client
-	scrapeSem   chan struct{}
-	videoCache sync.Map
-	bgWg       sync.WaitGroup
-	progress   CrawlProgress
-	crawlMu    sync.Mutex
-	crawlMuXh  sync.Mutex
-	crawlMuEp  sync.Mutex
-	crawlMuTf  sync.Mutex
-	crawlMuDt  sync.Mutex
-	catCache   catCacheT
-	rateLimiter chan time.Time
-	rateLimitXh chan time.Time
-	rateLimitEp chan time.Time
-	rateLimitTf chan time.Time
-	rateLimitDt chan time.Time
-	routeAPI    func(w http.ResponseWriter, r *http.Request)
-	startTime   = time.Now()
+	db            *sql.DB
+	tmpl          *template.Template
+	httpClient    *http.Client
+	mediaClient   *http.Client
+	scrapeSem     chan struct{}
+	videoCache    sync.Map
+	bgWg          sync.WaitGroup
+	progress      CrawlProgress
+	crawlMu       sync.Mutex
+	crawlMuXh     sync.Mutex
+	crawlMuEp     sync.Mutex
+	crawlMuTf     sync.Mutex
+	crawlMuDt     sync.Mutex
+	catCache      catCacheT
+	rateLimiter   chan time.Time
+	rateLimitXh   chan time.Time
+	rateLimitEp   chan time.Time
+	rateLimitTf   chan time.Time
+	rateLimitDt   chan time.Time
+	refreshLocks  sync.Map
+	routeAPI      func(w http.ResponseWriter, r *http.Request)
+	startTime     = time.Now()
 	loginAttempts = make(map[string]*loginEntry)
 	loginMu       sync.Mutex
 )
@@ -73,48 +74,58 @@ var userAgents = []string{
 }
 
 type catCacheT struct {
-	mu     sync.RWMutex
-	cats   []string
-	last   time.Time
+	mu   sync.RWMutex
+	cats []string
+	last time.Time
 }
 
 type CrawlProgress struct {
-	mu          sync.RWMutex
-	Status      string `json:"status"`
-	Source      string `json:"source"`
-	Scanned     int    `json:"scanned"`
-	NewVideos   int    `json:"new_videos"`
-	Cached      int    `json:"cached"`
-	DetailDone  int    `json:"detail_done"`
-	DetailTotal int    `json:"detail_total"`
-	Page        int    `json:"page"`
-	TotalCount  int    `json:"total_count"`
+	mu           sync.RWMutex
+	Status       string         `json:"status"`
+	Source       string         `json:"source"`
+	Scanned      int            `json:"scanned"`
+	NewVideos    int            `json:"new_videos"`
+	Cached       int            `json:"cached"`
+	DetailDone   int            `json:"detail_done"`
+	DetailTotal  int            `json:"detail_total"`
+	Page         int            `json:"page"`
+	TotalCount   int            `json:"total_count"`
 	SourceCounts map[string]int `json:"source_counts"`
 }
 
 const (
-	xnxxBase     = "https://www.xnxx.com"
-	thumbCDN     = "https://thumb-cdn77.xnxx-cdn.com"
-	thumbsCDN    = "https://thumbs-gcore.xnxx-cdn.com"
-	mp4CDN       = "https://mp4-cdn77.xnxx-cdn.com"
-	hlsCDN       = "https://hls-cdn77.xnxx-cdn.com"
-	xhBase       = "https://xhamster.com"
-	xhCDN        = "https://video3.xhcdn.com"
-	epBase       = "https://www.eporner.com"
-	epCDN        = "https://static-eu-cdn.eporner.com"
-	dbPath       = "karaxxx.db"
-	port         = "8799"
-	scrapeWorkers = 5
-	cacheTTL     = 5 * time.Minute
-	refreshEvery   = 20 * time.Minute
-	crawlLockPath  = "/tmp/karaxxx-crawl.lock"
-	maxHTTPRetries    = 3
-	retryBaseDelay    = 5 * time.Second
-	retryMaxDelay     = 30 * time.Second
-	rateLimitInterval = 400 * time.Millisecond
-	failureBaseDelay  = 5 * time.Minute
-	failureMaxDelay   = 6 * time.Hour
-	maxFailuresPerBatch = 20
+	xnxxBase                      = "https://www.xnxx.com"
+	thumbCDN                      = "https://thumb-cdn77.xnxx-cdn.com"
+	thumbsCDN                     = "https://thumbs-gcore.xnxx-cdn.com"
+	mp4CDN                        = "https://mp4-cdn77.xnxx-cdn.com"
+	hlsCDN                        = "https://hls-cdn77.xnxx-cdn.com"
+	xhBase                        = "https://xhamster.com"
+	xhCDN                         = "https://video3.xhcdn.com"
+	epBase                        = "https://www.eporner.com"
+	epCDN                         = "https://static-eu-cdn.eporner.com"
+	dbPath                        = "karaxxx.db"
+	port                          = "8799"
+	scrapeWorkers                 = 5
+	cacheTTL                      = 5 * time.Minute
+	refreshEvery                  = 20 * time.Minute
+	tokenRefreshLead              = 45 * time.Minute
+	expiringRefreshBatch          = 50
+	backfillBatchSize             = 12
+	backfillEvery                 = 30 * time.Minute
+	retryFailedEvery              = 15 * time.Minute
+	dbMaxOpenConns                = 8
+	dbBusyTimeout                 = 5 * time.Second
+	crawlLockPath                 = "/tmp/karaxxx-crawl.lock"
+	maxHTTPRetries                = 3
+	retryBaseDelay                = 5 * time.Second
+	retryMaxDelay                 = 30 * time.Second
+	rateLimitInterval             = 400 * time.Millisecond
+	failureBaseDelay              = 5 * time.Minute
+	failureMaxDelay               = 6 * time.Hour
+	maxFailuresPerBatch           = 20
+	maxScrapeFailuresBeforeDelete = 8
+	playableMediaSQL              = "(COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '')"
+	playableMediaSQLV             = "(COALESCE(v.url_360,'') <> '' OR COALESCE(v.url_720,'') <> '' OR COALESCE(v.url_1080,'') <> '' OR COALESCE(v.hls_url,'') <> '')"
 )
 
 var jwtSecret string
@@ -140,6 +151,7 @@ type Video struct {
 	HLSURL      string   `json:"hls_url,omitempty"`
 	SecureToken string   `json:"secure_token"`
 	ExpiresAt   int64    `json:"expires_at"`
+	WatchCount  int      `json:"watch_count"`
 }
 
 type cacheEntry struct {
@@ -180,6 +192,12 @@ func loadOrCreateJWTSecret() {
 // --- Init ---
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "invite" {
+		initInviteDB()
+		runInviteCLI(os.Args[2:])
+		return
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -191,7 +209,7 @@ func main() {
 	initRoutes()
 
 	go refreshLoop(ctx)
-	go scrapeNewVideoDetails()
+	go backgroundBackfillLoop(ctx)
 	go retryFailedLoop(ctx)
 	go func() {
 		// Prime xnxx session cookies for scraping and CDN proxy
@@ -246,7 +264,10 @@ func newRateLimiter(interval time.Duration) chan time.Time {
 	ch := make(chan time.Time, 1)
 	go func() {
 		for t := range time.NewTicker(interval).C {
-			select { case ch <- t: default: }
+			select {
+			case ch <- t:
+			default:
+			}
 		}
 	}()
 	return ch
@@ -256,9 +277,9 @@ func initHTTPClient() {
 	jar, _ := cookiejar.New(nil)
 
 	tr := &http.Transport{
-		MaxIdleConns:        20,
-		IdleConnTimeout:     30 * time.Second,
-		DisableCompression:  false,
+		MaxIdleConns:       20,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: false,
 	}
 	httpClient = &http.Client{
 		Transport: tr,
@@ -266,9 +287,9 @@ func initHTTPClient() {
 		Jar:       jar,
 	}
 	mediaTr := &http.Transport{
-		MaxIdleConns:        5,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
+		MaxIdleConns:          5,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    false,
 		ResponseHeaderTimeout: 15 * time.Second,
 	}
 	mediaClient = &http.Client{
@@ -296,12 +317,11 @@ func initHTTPClient() {
 
 func initDB() {
 	var err error
-	db, err = sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=OFF&cache=shared&_busy_timeout=5000")
+	db, err = sql.Open("sqlite3", sqliteDSN())
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	configureSQLitePool(db, dbMaxOpenConns)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS videos (
 		id TEXT PRIMARY KEY, slug TEXT, title TEXT, description TEXT,
@@ -380,6 +400,19 @@ func initDB() {
 		password_hash TEXT NOT NULL,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS invite_keys (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key_hash TEXT UNIQUE NOT NULL,
+		label TEXT DEFAULT '',
+		max_uses INTEGER DEFAULT 1,
+		uses INTEGER DEFAULT 0,
+		expires_at INTEGER DEFAULT 0,
+		revoked_at INTEGER DEFAULT 0,
+		last_used_at INTEGER DEFAULT 0,
+		last_used_by TEXT DEFAULT '',
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_invite_keys_hash ON invite_keys(key_hash)`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS favorites (
 		user_id INTEGER NOT NULL,
 		video_id TEXT NOT NULL,
@@ -409,14 +442,87 @@ func initDB() {
 		video_id TEXT NOT NULL,
 		position INTEGER DEFAULT 0,
 		duration INTEGER DEFAULT 0,
+		play_count INTEGER DEFAULT 0,
 		watched_at TEXT DEFAULT (datetime('now')),
 		updated_at TEXT DEFAULT (datetime('now')),
 		PRIMARY KEY (user_id, video_id),
 		FOREIGN KEY (user_id) REFERENCES users(id),
 		FOREIGN KEY (video_id) REFERENCES videos(id)
 	)`)
+	db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('watch_history') WHERE name='play_count'").Scan(&colCount)
+	if colCount == 0 {
+		db.Exec(`ALTER TABLE watch_history ADD COLUMN play_count INTEGER DEFAULT 0`)
+	}
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_watch_history_user ON watch_history(user_id, updated_at DESC)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_watch_history_video ON watch_history(video_id)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS user_profiles (
+		user_id INTEGER PRIMARY KEY,
+		display_name TEXT DEFAULT '',
+		anonymous_name TEXT NOT NULL,
+		comment_anonymously INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		updated_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (user_id) REFERENCES users(id)
+	)`)
+	profileRows, err := db.Query(`SELECT u.id FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE p.user_id IS NULL`)
+	if err == nil {
+		missingProfileIDs := []int{}
+		for profileRows.Next() {
+			var userID int
+			if profileRows.Scan(&userID) == nil {
+				missingProfileIDs = append(missingProfileIDs, userID)
+			}
+		}
+		profileRows.Close()
+		for _, userID := range missingProfileIDs {
+			db.Exec("INSERT OR IGNORE INTO user_profiles (user_id, anonymous_name) VALUES (?, ?)", userID, createAnonymousName())
+		}
+	}
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS video_watch_counts (
+		video_id TEXT PRIMARY KEY,
+		watch_count INTEGER DEFAULT 0,
+		updated_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (video_id) REFERENCES videos(id)
+	)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS video_comments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		video_id TEXT NOT NULL,
+		user_id INTEGER NOT NULL,
+		body TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		anonymous INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (video_id) REFERENCES videos(id),
+		FOREIGN KEY (user_id) REFERENCES users(id)
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id, created_at DESC)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS video_reactions (
+		video_id TEXT NOT NULL,
+		user_id INTEGER NOT NULL,
+		reaction TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (video_id, user_id, reaction),
+		FOREIGN KEY (video_id) REFERENCES videos(id),
+		FOREIGN KEY (user_id) REFERENCES users(id)
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_video_reactions_video ON video_reactions(video_id)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS wall_comments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		wall_user_id INTEGER NOT NULL,
+		author_id INTEGER NOT NULL,
+		body TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		anonymous INTEGER DEFAULT 1,
+		created_at TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (wall_user_id) REFERENCES users(id),
+		FOREIGN KEY (author_id) REFERENCES users(id)
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_wall_comments_wall ON wall_comments(wall_user_id, created_at DESC)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS playlists (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -455,6 +561,47 @@ func initDB() {
 	)`)
 }
 
+func initInviteDB() {
+	var err error
+	db, err = sql.Open("sqlite3", sqliteDSN())
+	if err != nil {
+		log.Fatal(err)
+	}
+	configureSQLitePool(db, 1)
+	db.Exec(`CREATE TABLE IF NOT EXISTS invite_keys (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key_hash TEXT UNIQUE NOT NULL,
+		label TEXT DEFAULT '',
+		max_uses INTEGER DEFAULT 1,
+		uses INTEGER DEFAULT 0,
+		expires_at INTEGER DEFAULT 0,
+		revoked_at INTEGER DEFAULT 0,
+		last_used_at INTEGER DEFAULT 0,
+		last_used_by TEXT DEFAULT '',
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_invite_keys_hash ON invite_keys(key_hash)`)
+}
+
+func sqliteDSN() string {
+	return dbPath + "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=on"
+}
+
+func configureSQLitePool(conn *sql.DB, maxOpen int) {
+	conn.SetMaxOpenConns(maxOpen)
+	conn.SetMaxIdleConns(maxOpen)
+	conn.SetConnMaxLifetime(0)
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Printf("sqlite WAL pragma failed: %v", err)
+	}
+	if _, err := conn.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		log.Printf("sqlite synchronous pragma failed: %v", err)
+	}
+	if _, err := conn.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", dbBusyTimeout.Milliseconds())); err != nil {
+		log.Printf("sqlite busy_timeout pragma failed: %v", err)
+	}
+}
+
 func runDBMaintenance() {
 	for range time.NewTicker(6 * time.Hour).C {
 		log.Println("Running DB maintenance...")
@@ -473,24 +620,47 @@ func runDBMaintenance() {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	var pageCount, pageSize int
-	db.QueryRow("SELECT page_count FROM pragma_page_count()").Scan(&pageCount)
-	db.QueryRow("SELECT page_size FROM pragma_page_size()").Scan(&pageSize)
-	dbSize := pageCount * pageSize
-
+	dbSize := int64(0)
+	if fi, err := os.Stat(dbPath); err == nil {
+		dbSize = fi.Size()
+	}
 	walSize := int64(0)
 	if fi, err := os.Stat(dbPath + "-wal"); err == nil {
 		walSize = fi.Size()
 	}
 
+	stats := db.Stats()
+	resp := map[string]interface{}{
+		"status":              "ok",
+		"db_size_bytes":       dbSize,
+		"wal_size_bytes":      walSize,
+		"uptime_seconds":      int(time.Since(startTime).Seconds()),
+		"goroutines":          runtime.NumGoroutine(),
+		"db_open_connections": stats.OpenConnections,
+		"db_in_use":           stats.InUse,
+		"db_idle":             stats.Idle,
+		"db_wait_count":       stats.WaitCount,
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+
 	var staleTokens int
-	db.QueryRow("SELECT COUNT(*) FROM videos WHERE expires_at < unixepoch() AND expires_at > 0").Scan(&staleTokens)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM videos WHERE expires_at < unixepoch() AND expires_at > 0").Scan(&staleTokens); err == nil {
+		resp["stale_tokens"] = staleTokens
+	} else {
+		resp["db_metrics_error"] = err.Error()
+	}
 
 	var failCount int
-	db.QueryRow("SELECT COUNT(*) FROM scrape_failures").Scan(&failCount)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scrape_failures").Scan(&failCount); err == nil {
+		resp["scrape_failures"] = failCount
+	} else if resp["db_metrics_error"] == nil {
+		resp["db_metrics_error"] = err.Error()
+	}
 
 	videosBySource := map[string]int{}
-	vrows, err := db.Query("SELECT source, COUNT(*) FROM videos GROUP BY source")
+	vrows, err := db.QueryContext(ctx, "SELECT source, COUNT(*) FROM videos GROUP BY source")
 	if err == nil {
 		defer vrows.Close()
 		for vrows.Next() {
@@ -499,17 +669,12 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 			vrows.Scan(&src, &cnt)
 			videosBySource[src] = cnt
 		}
+		resp["videos_by_source"] = videosBySource
+	} else if resp["db_metrics_error"] == nil {
+		resp["db_metrics_error"] = err.Error()
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"db_size_bytes":    dbSize,
-		"wal_size_bytes":   walSize,
-		"videos_by_source": videosBySource,
-		"stale_tokens":     staleTokens,
-		"scrape_failures":  failCount,
-		"uptime_seconds":   int(time.Since(startTime).Seconds()),
-		"goroutines":       runtime.NumGoroutine(),
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -542,9 +707,9 @@ func initTemplates() {
 			return fmt.Sprintf("%d", n)
 		},
 		"hasPrefix": strings.HasPrefix,
-		"add": func(a, b int) int { return a + b },
-		"sub": func(a, b int) int { return a - b },
-		"gt": func(a, b int) bool { return a > b },
+		"add":       func(a, b int) int { return a + b },
+		"sub":       func(a, b int) int { return a - b },
+		"gt":        func(a, b int) bool { return a > b },
 		"paginate": func(page, totalPages int) []int {
 			start := page - 3
 			if start < 1 {
@@ -577,6 +742,125 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+func randomInviteKey() string {
+	b := make([]byte, 24)
+	if _, err := crand.Read(b); err != nil {
+		return "kxxx_" + randomHex(24)
+	}
+	return "kxxx_" + base64.RawURLEncoding.EncodeToString(b)
+}
+
+func inviteKeyHash(key string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(key)))
+	return hex.EncodeToString(sum[:])
+}
+
+func printInviteUsage() {
+	fmt.Println(`Usage:
+  karaxxx invite create [label] [--uses N] [--days N]
+  karaxxx invite list
+  karaxxx invite revoke <key-or-hash>
+
+Examples:
+  karaxxx invite create alice --days 14
+  karaxxx invite create beta --uses 5 --days 30`)
+}
+
+func runInviteCLI(args []string) {
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
+		printInviteUsage()
+		return
+	}
+	switch args[0] {
+	case "create":
+		labelParts := []string{}
+		maxUses := 1
+		days := 30
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--uses":
+				if i+1 >= len(args) {
+					log.Fatal("--uses requires a number")
+				}
+				i++
+				if _, err := fmt.Sscanf(args[i], "%d", &maxUses); err != nil || maxUses < 1 {
+					log.Fatal("--uses must be a positive number")
+				}
+			case "--days":
+				if i+1 >= len(args) {
+					log.Fatal("--days requires a number")
+				}
+				i++
+				if _, err := fmt.Sscanf(args[i], "%d", &days); err != nil || days < 1 {
+					log.Fatal("--days must be a positive number")
+				}
+			default:
+				labelParts = append(labelParts, args[i])
+			}
+		}
+		key := randomInviteKey()
+		expiresAt := time.Now().Add(time.Duration(days) * 24 * time.Hour).Unix()
+		label := strings.Join(labelParts, " ")
+		if _, err := db.Exec(`INSERT INTO invite_keys (key_hash, label, max_uses, expires_at) VALUES (?, ?, ?, ?)`,
+			inviteKeyHash(key), label, maxUses, expiresAt); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("Invite key: %s\n", key)
+		fmt.Printf("Uses: %d\n", maxUses)
+		fmt.Printf("Expires: %s\n", time.Unix(expiresAt, 0).Format(time.RFC3339))
+		if label != "" {
+			fmt.Printf("Label: %s\n", label)
+		}
+	case "list":
+		rows, err := db.Query(`SELECT id, label, max_uses, uses, expires_at, revoked_at, last_used_by
+			FROM invite_keys ORDER BY id DESC LIMIT 100`)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer rows.Close()
+		fmt.Println("ID\tUSES\tEXPIRES\tSTATUS\tLABEL\tLAST_USED_BY")
+		now := time.Now().Unix()
+		for rows.Next() {
+			var id, maxUses, uses int
+			var expiresAt, revokedAt int64
+			var label, lastUsedBy string
+			rows.Scan(&id, &label, &maxUses, &uses, &expiresAt, &revokedAt, &lastUsedBy)
+			status := "active"
+			if revokedAt > 0 {
+				status = "revoked"
+			} else if expiresAt > 0 && expiresAt <= now {
+				status = "expired"
+			} else if maxUses > 0 && uses >= maxUses {
+				status = "used"
+			}
+			expires := "never"
+			if expiresAt > 0 {
+				expires = time.Unix(expiresAt, 0).Format("2006-01-02")
+			}
+			fmt.Printf("%d\t%d/%d\t%s\t%s\t%s\t%s\n", id, uses, maxUses, expires, status, label, lastUsedBy)
+		}
+	case "revoke":
+		if len(args) < 2 {
+			log.Fatal("revoke requires a key or hash")
+		}
+		hash := strings.TrimSpace(args[1])
+		if strings.HasPrefix(hash, "kxxx_") {
+			hash = inviteKeyHash(hash)
+		}
+		res, err := db.Exec(`UPDATE invite_keys SET revoked_at = ? WHERE key_hash = ?`, time.Now().Unix(), hash)
+		if err != nil {
+			log.Fatal(err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			log.Fatal("invite key not found")
+		}
+		fmt.Println("Invite revoked")
+	default:
+		printInviteUsage()
+	}
+}
+
 func hashPassword(password string) string {
 	salt := randomHex(16)
 	h := sha256.Sum256([]byte(salt + password))
@@ -602,6 +886,48 @@ func createToken(userID int, username string) string {
 	mac.Write([]byte(signingInput))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	return signingInput + "." + sig
+}
+
+const authCookieName = "kxxx_token"
+
+func setAuthCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int((30 * 24 * time.Hour).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func writeAuthResponse(w http.ResponseWriter, token string, userID int, username string) {
+	setAuthCookie(w, token)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token": token,
+		"user": map[string]interface{}{
+			"id":       userID,
+			"username": username,
+		},
+	})
 }
 
 func parseToken(token string) (int, string, bool) {
@@ -639,46 +965,117 @@ func parseToken(token string) (int, string, bool) {
 	return claims.UID, claims.UN, true
 }
 
-func authMiddleware(w http.ResponseWriter, r *http.Request) (int, string, bool) {
+func authFromRequest(r *http.Request) (int, string, bool) {
 	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return 0, "", false
+	if strings.HasPrefix(auth, "Bearer ") {
+		return parseToken(strings.TrimPrefix(auth, "Bearer "))
 	}
-	return parseToken(strings.TrimPrefix(auth, "Bearer "))
+	if cookie, err := r.Cookie(authCookieName); err == nil && cookie.Value != "" {
+		return parseToken(cookie.Value)
+	}
+	return 0, "", false
+}
+
+func authMiddleware(w http.ResponseWriter, r *http.Request) (int, string, bool) {
+	return authFromRequest(r)
+}
+
+func normalizeUsername(username string) string {
+	return strings.TrimSpace(username)
+}
+
+func validUsername(username string) bool {
+	if len(username) < 3 || len(username) > 32 {
+		return false
+	}
+	for _, r := range username {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func registerUserWithInvite(username, password, inviteKey string) (int64, error) {
+	inviteKey = strings.TrimSpace(inviteKey)
+	if inviteKey == "" {
+		return 0, fmt.Errorf("invite key required")
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE invite_keys
+		SET uses = uses + 1, last_used_at = ?, last_used_by = ?
+		WHERE key_hash = ?
+		  AND COALESCE(revoked_at, 0) = 0
+		  AND (COALESCE(expires_at, 0) = 0 OR expires_at > ?)
+		  AND (COALESCE(max_uses, 1) = 0 OR uses < max_uses)`,
+		time.Now().Unix(), username, inviteKeyHash(inviteKey), time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return 0, fmt.Errorf("invalid or expired invite key")
+	}
+
+	userRes, err := tx.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", username, hashPassword(password))
+	if err != nil {
+		return 0, fmt.Errorf("username taken")
+	}
+	id, _ := userRes.LastInsertId()
+	if _, err := tx.Exec("INSERT OR IGNORE INTO user_profiles (user_id, anonymous_name) VALUES (?, ?)", id, createAnonymousName()); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only", 405)
+		writeJSONError(w, 405, "POST only")
 		return
 	}
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		InviteKey string `json:"invite_key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || body.Password == "" {
-		http.Error(w, `{"error":"username and password required"}`, 400)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, 400, "invalid body")
+		return
+	}
+	body.Username = normalizeUsername(body.Username)
+	if body.Username == "" || body.Password == "" {
+		writeJSONError(w, 400, "username and password required")
+		return
+	}
+	if !validUsername(body.Username) {
+		writeJSONError(w, 400, "username must be 3-32 letters, numbers, dashes, or underscores")
 		return
 	}
 	if len(body.Password) < 4 {
-		http.Error(w, `{"error":"password too short"}`, 400)
+		writeJSONError(w, 400, "password too short")
 		return
 	}
-	hash := hashPassword(body.Password)
-	res, err := db.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", body.Username, hash)
+	id, err := registerUserWithInvite(body.Username, body.Password, body.InviteKey)
 	if err != nil {
-		http.Error(w, `{"error":"username taken"}`, 409)
+		writeJSONError(w, 400, err.Error())
 		return
 	}
-	id, _ := res.LastInsertId()
 	token := createToken(int(id), body.Username)
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"token":"%s","user":{"id":%d,"username":"%s"}}`, token, id, body.Username)
+	writeAuthResponse(w, token, int(id), body.Username)
 }
 
 func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only", 405)
+		writeJSONError(w, 405, "POST only")
 		return
 	}
 	ip := r.RemoteAddr
@@ -690,7 +1087,7 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if exists && time.Now().Before(entry.until) && entry.attempts >= 5 {
 		loginMu.Unlock()
 		w.Header().Set("Retry-After", "900")
-		http.Error(w, `{"error":"too many attempts, try again in 15 minutes"}`, 429)
+		writeJSONError(w, 429, "too many attempts, try again in 15 minutes")
 		return
 	}
 	loginMu.Unlock()
@@ -700,9 +1097,10 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid body"}`, 400)
+		writeJSONError(w, 400, "invalid body")
 		return
 	}
+	body.Username = normalizeUsername(body.Username)
 	var id int
 	var hash string
 	err := db.QueryRow("SELECT id, password_hash FROM users WHERE username = ?", body.Username).Scan(&id, &hash)
@@ -714,25 +1112,33 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			entry.attempts++
 		}
 		loginMu.Unlock()
-		http.Error(w, `{"error":"invalid credentials"}`, 401)
+		writeJSONError(w, 401, "invalid credentials")
 		return
 	}
 	loginMu.Lock()
 	delete(loginAttempts, ip)
 	loginMu.Unlock()
 	token := createToken(id, body.Username)
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"token":"%s","user":{"id":%d,"username":"%s"}}`, token, id, body.Username)
+	writeAuthResponse(w, token, id, body.Username)
 }
 
 func handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	uid, un, ok := authMiddleware(w, r)
 	if !ok {
-		http.Error(w, `{"error":"unauthorized"}`, 401)
+		writeJSONError(w, 401, "unauthorized")
 		return
 	}
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		setAuthCookie(w, strings.TrimPrefix(auth, "Bearer "))
+	}
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"id":%d,"username":"%s"}`, uid, un)
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": uid, "username": un})
+}
+
+func handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	clearAuthCookie(w)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func handleAuthDebug(w http.ResponseWriter, r *http.Request) {
@@ -834,6 +1240,21 @@ func handleFavCategories(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cats)
 }
 
+func publicRequestPath(path string) bool {
+	switch path {
+	case "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout", "/api/health":
+		return true
+	}
+	return false
+}
+
+func protectedRequestPath(path string) bool {
+	return strings.HasPrefix(path, "/api/") ||
+		strings.HasPrefix(path, "/vid/") ||
+		strings.HasPrefix(path, "/thumb/") ||
+		path == "/media"
+}
+
 func securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet, noimageindex")
@@ -842,6 +1263,12 @@ func securityMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		if protectedRequestPath(r.URL.Path) && !publicRequestPath(r.URL.Path) {
+			if _, _, ok := authFromRequest(r); !ok {
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -897,12 +1324,16 @@ func initRoutes() {
 				handleAPIRclassify(w, r)
 			case r.URL.Path == "/api/status":
 				handleStatusSSE(w, r)
+			case r.URL.Path == "/api/changelog":
+				handleAPIChangelog(w, r)
 			case r.URL.Path == "/api/auth/register":
 				handleAuthRegister(w, r)
 			case r.URL.Path == "/api/auth/login":
 				handleAuthLogin(w, r)
 			case r.URL.Path == "/api/auth/me":
 				handleAuthMe(w, r)
+			case r.URL.Path == "/api/auth/logout":
+				handleAuthLogout(w, r)
 			case r.URL.Path == "/api/auth/debug":
 				handleAuthDebug(w, r)
 			case strings.HasPrefix(r.URL.Path, "/api/fav/video/"):
@@ -935,6 +1366,12 @@ func initRoutes() {
 				handleSuggestions(w, r)
 			case r.URL.Path == "/api/profile":
 				handleProfile(w, r)
+			case r.URL.Path == "/api/profile/settings":
+				handleProfileSettings(w, r)
+			case strings.HasPrefix(r.URL.Path, "/api/social/video/"):
+				handleVideoSocialRouter(w, r)
+			case strings.HasPrefix(r.URL.Path, "/api/wall/"):
+				handleWallRouter(w, r)
 			case strings.HasPrefix(r.URL.Path, "/api/fav/category"):
 				handleFavCategory(w, r)
 			case r.URL.Path == "/api/fav/categories":
@@ -966,9 +1403,11 @@ func initRoutes() {
 	http.HandleFunc("/api/refresh", handleAPIRefresh)
 	http.HandleFunc("/api/reclassify", handleAPIRclassify)
 	http.HandleFunc("/api/status", handleStatusSSE)
+	http.HandleFunc("/api/changelog", handleAPIChangelog)
 	http.HandleFunc("/api/auth/register", handleAuthRegister)
 	http.HandleFunc("/api/auth/login", handleAuthLogin)
 	http.HandleFunc("/api/auth/me", handleAuthMe)
+	http.HandleFunc("/api/auth/logout", handleAuthLogout)
 	http.HandleFunc("/api/auth/debug", handleAuthDebug)
 	http.HandleFunc("/api/fav/video/", handleFavVideo)
 	http.HandleFunc("/api/fav/videos", handleFavVideos)
@@ -987,6 +1426,9 @@ func initRoutes() {
 	http.HandleFunc("/api/for-you", handleForYou)
 	http.HandleFunc("/api/suggestions", handleSuggestions)
 	http.HandleFunc("/api/profile", handleProfile)
+	http.HandleFunc("/api/profile/settings", handleProfileSettings)
+	http.HandleFunc("/api/social/video/", handleVideoSocialRouter)
+	http.HandleFunc("/api/wall/", handleWallRouter)
 }
 
 // --- Background refresh every 20 min ---
@@ -1006,9 +1448,29 @@ func refreshLoop(ctx context.Context) {
 	}
 }
 
+func backgroundBackfillLoop(ctx context.Context) {
+	ticker := time.NewTicker(backfillEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			scrapeNewVideoDetails()
+		}
+	}
+}
+
 func refreshExpiring() {
-	cutoff := time.Now().Add(6 * time.Hour).Unix()
-	rows, err := db.Query("SELECT id, slug FROM videos WHERE expires_at > 0 AND expires_at < ? ORDER BY expires_at ASC LIMIT 500", cutoff)
+	now := time.Now().Unix()
+	cutoff := time.Now().Add(tokenRefreshLead).Unix()
+	rows, err := db.Query(`SELECT id FROM videos
+		WHERE expires_at > ?
+		  AND expires_at < ?
+		  AND COALESCE(source, 'xnxx') IN ('xnxx', 'xhamster')
+		  AND (COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '')
+		ORDER BY expires_at ASC LIMIT ?`, now, cutoff, expiringRefreshBatch)
 	if err != nil {
 		log.Printf("Refresh query failed: %v", err)
 		return
@@ -1017,8 +1479,8 @@ func refreshExpiring() {
 
 	var ids []string
 	for rows.Next() {
-		var id, slug string
-		rows.Scan(&id, &slug)
+		var id string
+		rows.Scan(&id)
 		ids = append(ids, id)
 	}
 
@@ -1035,12 +1497,15 @@ func refreshExpiring() {
 		go func(vid string) {
 			defer wg.Done()
 			defer func() { <-scrapeSem }()
-			if v, err := scrapeVideoDetail(vid); err == nil {
-				storeVideo(v)
-				clearScrapeFailure(vid)
-				log.Printf("Refreshed %s", vid)
+			time.Sleep(time.Duration(rand.Intn(1500)) * time.Millisecond)
+			if v, ok := loadVideoFromDB(vid); ok {
+				if refreshed, err := ensureFreshVideo(v, tokenRefreshLead); err == nil {
+					log.Printf("Pre-warmed media token for %s (%s)", refreshed.ID, refreshed.Source)
+				} else {
+					log.Printf("Pre-warm failed for %s: %v", vid, err)
+				}
 			} else {
-				recordScrapeFailure(vid, err)
+				clearScrapeFailure(vid)
 			}
 		}(id)
 	}
@@ -1275,7 +1740,7 @@ func refreshCatCache() {
 	if time.Since(catCache.last) < 30*time.Second {
 		return
 	}
-	rows, err := db.Query(`SELECT categories FROM videos WHERE categories != '' AND categories IS NOT NULL AND categories != 'uncategorized'`)
+	rows, err := db.Query(`SELECT categories FROM videos WHERE categories != '' AND categories IS NOT NULL AND categories != 'uncategorized' AND ` + playableMediaSQL)
 	if err != nil {
 		return
 	}
@@ -1346,9 +1811,9 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 
 	validSorts := map[string]string{
-		"recent": "v.added_at DESC",
-		"new":    "v.upload_date DESC",
-		"views":  "v.views DESC",
+		"recent":   "v.added_at DESC",
+		"new":      "v.upload_date DESC",
+		"views":    "v.views DESC",
 		"duration": "v.duration DESC",
 		"trending": "(CAST(v.views AS REAL) / MAX(1.0, julianday('now') - julianday(v.added_at))) DESC",
 	}
@@ -1356,7 +1821,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 	if o, ok := validSorts[sort]; ok {
 		orderBy = o
 	}
-	var whereClauses []string
+	whereClauses := []string{playableMediaSQLV}
 	var args []interface{}
 	if cat != "" {
 		whereClauses = append(whereClauses, "v.categories LIKE ?")
@@ -1389,8 +1854,8 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 			ftsArgs := []interface{}{sanitized}
 			ftsArgs = append(ftsArgs, args...)
 			rows, err := db.Query(
-				`SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx')
-				 FROM videos_fts f JOIN videos v ON v.rowid = f.rowid`+ftsWhere+` ORDER BY rank LIMIT ? OFFSET ?`,
+				`SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx'), COALESCE(wc.watch_count, 0)
+					 FROM videos_fts f JOIN videos v ON v.rowid = f.rowid LEFT JOIN video_watch_counts wc ON wc.video_id = v.id`+ftsWhere+` ORDER BY rank LIMIT ? OFFSET ?`,
 				append(ftsArgs, perPage, (page-1)*perPage)...)
 			if err == nil {
 				defer rows.Close()
@@ -1398,7 +1863,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 					vv := Video{}
 					var dur, views sql.NullInt64
 					var cats, uploadDate sql.NullString
-					rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
+					rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source, &vv.WatchCount)
 					vv.Duration = int(dur.Int64)
 					vv.Views = int(views.Int64)
 					if cats.Valid && cats.String != "" {
@@ -1414,7 +1879,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// COALESCE everything nullable: stub rows (tnaflix/drtuber) leave columns
 		// NULL, and a NULL aborts rows.Scan mid-row → blank cards in the UI.
-		query := `SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx') FROM videos v` + where + ` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
+		query := `SELECT v.id, COALESCE(v.slug,''), COALESCE(v.title,''), COALESCE(v.description,''), v.categories, v.duration, v.views, COALESCE(v.thumb_uuid,''), COALESCE(v.preview_url,''), COALESCE(v.added_at,''), v.upload_date, COALESCE(v.source,'xnxx'), COALESCE(wc.watch_count, 0) FROM videos v LEFT JOIN video_watch_counts wc ON wc.video_id = v.id` + where + ` ORDER BY ` + orderBy + ` LIMIT ? OFFSET ?`
 		rows, err := db.Query(query, append(args, perPage, (page-1)*perPage)...)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -1425,7 +1890,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 			vv := Video{}
 			var dur, views sql.NullInt64
 			var cats, uploadDate sql.NullString
-			rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
+			rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source, &vv.WatchCount)
 			vv.Duration = int(dur.Int64)
 			vv.Views = int(views.Int64)
 			if cats.Valid && cats.String != "" {
@@ -1470,7 +1935,7 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 
 func handleAPIVideo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 
 	id := strings.TrimPrefix(r.URL.Path, "/api/video/")
 	id = strings.TrimSuffix(id, "/")
@@ -1479,69 +1944,20 @@ func handleAPIVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	v := Video{}
-	var dur, views sql.NullInt64
-	var cats, tags sql.NullString
-	var uploader, uploadDate sql.NullString
-	var expiresAt sql.NullInt64
-	err := db.QueryRow(
-		`SELECT id, slug, title, description, categories, tags, uploader, upload_date,
-		        duration, views, url_360, url_720, url_1080, hls_url, thumb_uuid,
-		        preview_url, expires_at, source
-		 FROM videos WHERE id = ?`, id,
-	).Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &tags, &uploader, &uploadDate,
-		&dur, &views, &v.URL360, &v.URL720, &v.URL1080, &v.HLSURL, &v.ThumbUUID,
-		&v.PreviewURL, &expiresAt, &v.Source)
-	if err != nil {
+	v, ok := loadFreshVideoByID(id, tokenRefreshLead)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	v.Duration = int(dur.Int64)
-	v.Views = int(views.Int64)
-	if expiresAt.Valid {
-		v.ExpiresAt = expiresAt.Int64
+	type videoResponse struct {
+		Video
+		WatchedPosition int `json:"watched_position,omitempty"`
 	}
-	if cats.Valid && cats.String != "" {
-		v.Categories = strings.Split(cats.String, ",")
-	}
-	if tags.Valid && tags.String != "" {
-		v.Tags = strings.Split(tags.String, ",")
-	}
-	if uploader.Valid {
-		v.Uploader = uploader.String
-	}
-	if uploadDate.Valid {
-		v.UploadDate = uploadDate.String
-	}
-
-	// Include watched_position for authenticated users
+	resp := videoResponse{Video: v}
 	if uid, _, ok := authMiddleware(w, r); ok {
-		var pos int
-		db.QueryRow("SELECT COALESCE(position, 0) FROM watch_history WHERE user_id = ? AND video_id = ?", uid, id).Scan(&pos)
-		// Append as extra field — wrap in map to include both Video fields and watched_position
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": v.ID, "slug": v.Slug, "title": v.Title, "description": v.Description,
-			"categories": v.Categories, "tags": v.Tags, "uploader": v.Uploader,
-			"upload_date": v.UploadDate, "duration": v.Duration, "views": v.Views,
-			"added_at": v.AddedAt, "source": v.Source, "thumb_uuid": v.ThumbUUID,
-			"url_360": v.URL360, "url_720": v.URL720, "url_1080": v.URL1080,
-			"preview_url": v.PreviewURL, "hls_url": v.HLSURL,
-			"secure_token": v.SecureToken, "expires_at": v.ExpiresAt,
-			"watched_position": pos,
-		})
-		return
+		db.QueryRow("SELECT COALESCE(position, 0) FROM watch_history WHERE user_id = ? AND video_id = ?", uid, id).Scan(&resp.WatchedPosition)
 	}
-
-	if v.ExpiresAt == 0 || (v.ExpiresAt > 0 && v.ExpiresAt < time.Now().Add(10*time.Minute).Unix()) {
-		go func(vid string) {
-			if refreshed, err := scrapeVideoDetail(vid); err == nil {
-				storeVideo(refreshed)
-				setCachedVideo(vid, refreshed)
-			}
-		}(id)
-	}
-
-	json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -1572,7 +1988,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			v := Video{}
 			var dur, views sql.NullInt64
 			var cats, uploadDate sql.NullString
-		rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source)
+			rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source)
 			v.Duration = int(dur.Int64)
 			v.Views = int(views.Int64)
 			if cats.Valid && cats.String != "" {
@@ -1594,64 +2010,16 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePlay(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 
 	id := strings.TrimPrefix(r.URL.Path, "/play/")
 	id = strings.TrimSuffix(id, "/")
 
-	// Check in-memory cache
-	if v, ok := getCachedVideo(id); ok {
-		renderPlayPage(w, r, v)
-		return
-	}
-
-	v := Video{}
-	var dur, views sql.NullInt64
-	var cats, tags sql.NullString
-	var uploader, uploadDate sql.NullString
-	var expiresAt sql.NullInt64
-	err := db.QueryRow(
-		`SELECT id, slug, title, description, categories, tags, uploader, upload_date,
-		        duration, views, url_360, url_720, url_1080, hls_url, thumb_uuid,
-		        preview_url, expires_at, source
-		 FROM videos WHERE id = ?`, id,
-	).Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &tags, &uploader, &uploadDate,
-		&dur, &views, &v.URL360, &v.URL720, &v.URL1080, &v.HLSURL, &v.ThumbUUID,
-		&v.PreviewURL, &expiresAt, &v.Source)
-	if err != nil {
+	v, ok := loadFreshVideoByID(id, tokenRefreshLead)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	v.Duration = int(dur.Int64)
-	v.Views = int(views.Int64)
-	if expiresAt.Valid {
-		v.ExpiresAt = expiresAt.Int64
-	}
-	if cats.Valid && cats.String != "" {
-		v.Categories = strings.Split(cats.String, ",")
-	}
-	if tags.Valid && tags.String != "" {
-		v.Tags = strings.Split(tags.String, ",")
-	}
-	if uploader.Valid {
-		v.Uploader = uploader.String
-	}
-	if uploadDate.Valid {
-		v.UploadDate = uploadDate.String
-	}
-
-	// If token is expired or about to expire in <10 min, auto-refresh in background
-	if v.ExpiresAt == 0 || (v.ExpiresAt > 0 && v.ExpiresAt < time.Now().Add(10*time.Minute).Unix()) {
-		go func(vid string) {
-			if refreshed, err := scrapeVideoDetail(vid); err == nil {
-				storeVideo(refreshed)
-				setCachedVideo(vid, refreshed)
-				log.Printf("Auto-refreshed %s (token was expiring)", vid)
-			}
-		}(id)
-	}
-
-	setCachedVideo(id, v)
 	renderPlayPage(w, r, v)
 }
 
@@ -1720,55 +2088,221 @@ func handleMediaProxy(w http.ResponseWriter, r *http.Request) {
 	proxyCDN(w, r, targetURL)
 }
 
-func loadOrRefreshVideo(id string) (Video, bool) {
-	if v, ok := getCachedVideo(id); ok {
-		if v.ExpiresAt == 0 || v.ExpiresAt > time.Now().Unix() {
-			return v, true
+func hasPlayableMedia(v Video) bool {
+	return v.URL360 != "" || v.URL720 != "" || v.URL1080 != "" || v.HLSURL != ""
+}
+
+func tokenedSource(source string) bool {
+	switch source {
+	case "", "xnxx", "xhamster":
+		return true
+	default:
+		return false
+	}
+}
+
+func expiryFromMediaURL(rawURL string) int64 {
+	if rawURL == "" {
+		return 0
+	}
+	if u, err := url.Parse(rawURL); err == nil {
+		if token := u.Query().Get("secure"); token != "" {
+			if expiry := parseTokenExpiry(token); expiry > 0 {
+				return expiry
+			}
 		}
 	}
+	if m := regexp.MustCompile(`[?&]secure=([^&"'\s]+)`).FindStringSubmatch(rawURL); len(m) > 1 {
+		if expiry := parseTokenExpiry(m[1]); expiry > 0 {
+			return expiry
+		}
+	}
+	if m := reXhTokenExpiry.FindStringSubmatch(rawURL); len(m) > 1 {
+		var expiry int64
+		fmt.Sscanf(m[1], "%d", &expiry)
+		return expiry
+	}
+	return 0
+}
+
+func mediaExpiresAt(v Video) int64 {
+	var minExpiry int64
+	for _, rawURL := range []string{v.URL360, v.URL720, v.URL1080, v.HLSURL} {
+		expiry := expiryFromMediaURL(rawURL)
+		if expiry == 0 {
+			continue
+		}
+		if minExpiry == 0 || expiry < minExpiry {
+			minExpiry = expiry
+		}
+	}
+	if minExpiry == 0 {
+		minExpiry = v.ExpiresAt
+	}
+	return minExpiry
+}
+
+func normalizeVideoExpiry(v *Video) {
+	if v.ExpiresAt == 0 {
+		v.ExpiresAt = mediaExpiresAt(*v)
+	}
+}
+
+func videoNeedsTokenRefresh(v Video, lead time.Duration) bool {
+	if !hasPlayableMedia(v) {
+		return tokenedSource(v.Source)
+	}
+	expiry := mediaExpiresAt(v)
+	if expiry == 0 {
+		return tokenedSource(v.Source)
+	}
+	return expiry <= time.Now().Add(lead).Unix()
+}
+
+func refreshLock(videoID string) func() {
+	val, _ := refreshLocks.LoadOrStore(videoID, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func scrapeVideoDetailForSource(id, source string) (Video, error) {
+	switch source {
+	case "xhamster":
+		return scrapeXhVideoDetail(id)
+	case "eporner":
+		return scrapeEpVideoDetail(id)
+	case "tnaflix":
+		return scrapeTfVideoDetail(id)
+	case "drtuber":
+		return scrapeDtVideoDetail(id)
+	default:
+		return scrapeVideoDetail(id)
+	}
+}
+
+func loadVideoFromDB(id string) (Video, bool) {
 	v := Video{}
-	var dur, views sql.NullInt64
-	var cats, tags sql.NullString
-	var uploader, uploadDate sql.NullString
-	var expiresAt sql.NullInt64
+	var cats, tags string
 	err := db.QueryRow(
-		`SELECT id, slug, title, description, categories, tags, uploader, upload_date,
-		        duration, views, url_360, url_720, url_1080, hls_url, thumb_uuid,
-		        preview_url, expires_at, source
+		`SELECT id, COALESCE(slug,''), COALESCE(title,''), COALESCE(description,''),
+		        COALESCE(categories,''), COALESCE(tags,''), COALESCE(uploader,''), COALESCE(upload_date,''),
+		        COALESCE(duration,0), COALESCE(views,0),
+		        COALESCE(url_360,''), COALESCE(url_720,''), COALESCE(url_1080,''), COALESCE(hls_url,''),
+		        COALESCE(thumb_uuid,''), COALESCE(preview_url,''), COALESCE(secure_token,''),
+		        COALESCE(expires_at,0), COALESCE(source,'xnxx'), COALESCE(added_at,'')
 		 FROM videos WHERE id = ?`, id,
-	).Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &tags, &uploader, &uploadDate,
-		&dur, &views, &v.URL360, &v.URL720, &v.URL1080, &v.HLSURL, &v.ThumbUUID,
-		&v.PreviewURL, &expiresAt, &v.Source)
+	).Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &tags, &v.Uploader, &v.UploadDate,
+		&v.Duration, &v.Views, &v.URL360, &v.URL720, &v.URL1080, &v.HLSURL,
+		&v.ThumbUUID, &v.PreviewURL, &v.SecureToken, &v.ExpiresAt, &v.Source, &v.AddedAt)
 	if err != nil {
 		return v, false
 	}
-	v.Duration = int(dur.Int64)
-	v.Views = int(views.Int64)
-	if expiresAt.Valid {
-		v.ExpiresAt = expiresAt.Int64
+	if cats != "" {
+		v.Categories = strings.Split(cats, ",")
 	}
-	if cats.Valid && cats.String != "" {
-		v.Categories = strings.Split(cats.String, ",")
+	if tags != "" {
+		v.Tags = strings.Split(tags, ",")
 	}
-	if tags.Valid && tags.String != "" {
-		v.Tags = strings.Split(tags.String, ",")
-	}
-	if uploader.Valid {
-		v.Uploader = uploader.String
-	}
-	if uploadDate.Valid {
-		v.UploadDate = uploadDate.String
+	normalizeVideoExpiry(&v)
+	db.QueryRow("SELECT COALESCE(watch_count, 0) FROM video_watch_counts WHERE video_id = ?", id).Scan(&v.WatchCount)
+	return v, true
+}
+
+func ensureFreshVideo(v Video, lead time.Duration) (Video, error) {
+	normalizeVideoExpiry(&v)
+	if hasPlayableMedia(v) && !videoNeedsTokenRefresh(v, lead) {
+		return v, nil
 	}
 
-	if v.ExpiresAt == 0 || (v.ExpiresAt > 0 && v.ExpiresAt < time.Now().Unix()) {
-		if refreshed, err := scrapeVideoDetail(id); err == nil {
-			storeVideo(refreshed)
-			setCachedVideo(id, refreshed)
-			return refreshed, true
+	unlock := refreshLock(v.ID)
+	defer unlock()
+
+	if latest, ok := loadVideoFromDB(v.ID); ok {
+		v = latest
+		if hasPlayableMedia(v) && !videoNeedsTokenRefresh(v, lead) {
+			setCachedVideo(v.ID, v)
+			return v, nil
 		}
 	}
-	setCachedVideo(id, v)
-	return v, true
+
+	refreshed, err := scrapeVideoDetailForSource(v.ID, v.Source)
+	if err != nil {
+		recordScrapeFailure(v.ID, err)
+		return v, err
+	}
+	normalizeVideoExpiry(&refreshed)
+	if !hasPlayableMedia(refreshed) {
+		err := fmt.Errorf("%s detail scrape returned no playable media for %s", refreshed.Source, refreshed.ID)
+		recordScrapeFailure(v.ID, err)
+		return v, err
+	}
+	storeVideo(refreshed)
+	clearScrapeFailure(v.ID)
+	setCachedVideo(v.ID, refreshed)
+	return refreshed, nil
+}
+
+func loadFreshVideoByID(id string, lead time.Duration) (Video, bool) {
+	if v, ok := getCachedVideo(id); ok {
+		normalizeVideoExpiry(&v)
+		if hasPlayableMedia(v) && !videoNeedsTokenRefresh(v, lead) {
+			return v, true
+		}
+	}
+	v, ok := loadVideoFromDB(id)
+	if !ok {
+		return v, false
+	}
+	fresh, err := ensureFreshVideo(v, lead)
+	if err != nil {
+		log.Printf("fresh media unavailable for %s (%s): %v", v.ID, v.Source, err)
+		return Video{}, false
+	}
+	return fresh, true
+}
+
+func deleteVideoEverywhere(videoID, reason string) {
+	db.Exec("DELETE FROM favorites WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM watch_history WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM playlist_videos WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM video_comments WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM video_reactions WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM video_watch_counts WHERE video_id = ?", videoID)
+	db.Exec("DELETE FROM scrape_failures WHERE video_id = ?", videoID)
+	if _, err := db.Exec("DELETE FROM videos WHERE id = ?", videoID); err != nil {
+		log.Printf("delete failed for %s: %v", videoID, err)
+		return
+	}
+	videoCache.Delete(videoID)
+	log.Printf("Deleted unplayable video %s after repeated scrape failures: %s", videoID, reason)
+}
+
+func pruneFailedVideoIfUnplayable(videoID, reason string) {
+	var playable int
+	err := db.QueryRow(`SELECT CASE WHEN COALESCE(url_360,'') <> ''
+		OR COALESCE(url_720,'') <> ''
+		OR COALESCE(url_1080,'') <> ''
+		OR COALESCE(hls_url,'') <> ''
+		THEN 1 ELSE 0 END FROM videos WHERE id = ?`, videoID).Scan(&playable)
+	if err == sql.ErrNoRows {
+		clearScrapeFailure(videoID)
+		return
+	}
+	if err != nil || playable == 1 {
+		return
+	}
+	deleteVideoEverywhere(videoID, reason)
+}
+
+func loadOrRefreshVideo(id string) (Video, bool) {
+	if v, ok := getCachedVideo(id); ok {
+		normalizeVideoExpiry(&v)
+		if hasPlayableMedia(v) && !videoNeedsTokenRefresh(v, tokenRefreshLead) {
+			return v, true
+		}
+	}
+	return loadFreshVideoByID(id, tokenRefreshLead)
 }
 
 func proxyCDN(w http.ResponseWriter, r *http.Request, targetURL string) {
@@ -1835,7 +2369,7 @@ func fetchRelated(v Video) []Video {
 		}
 		catArgs = append(catArgs, v.ID)
 		rrows, err := db.Query(
-			"SELECT id, title, duration, views, thumb_uuid FROM videos WHERE ("+strings.Join(catPatterns, " OR ")+") AND id != ? ORDER BY views DESC LIMIT 12",
+			"SELECT id, title, duration, views, thumb_uuid FROM videos WHERE ("+strings.Join(catPatterns, " OR ")+") AND id != ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT 12",
 			catArgs...)
 		if err == nil {
 			for rrows.Next() {
@@ -1850,7 +2384,7 @@ func fetchRelated(v Video) []Video {
 		}
 	}
 	if len(related) == 0 {
-		rrows, err := db.Query("SELECT id, title, duration, views, thumb_uuid FROM videos WHERE id != ? ORDER BY views DESC LIMIT 12", v.ID)
+		rrows, err := db.Query("SELECT id, title, duration, views, thumb_uuid FROM videos WHERE id != ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT 12", v.ID)
 		if err == nil {
 			for rrows.Next() {
 				rv := Video{}
@@ -2256,7 +2790,7 @@ func processSitemaps() {
 		log.Printf("Sitemap fetch failed: %v", err)
 		return
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1 << 20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	resp.Body.Close()
 
 	var sitemapVIDs []string
@@ -2274,7 +2808,7 @@ func processSitemaps() {
 	// Fetch popular search terms from main sitemap
 	resp2, err := httpGetWithRetry(xnxxBase + "/sitemap_main.xml")
 	if err == nil {
-		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 1 << 20))
+		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 1<<20))
 		resp2.Body.Close()
 		for _, m := range regexp.MustCompile(`xnxx\.com/search/([^<]+)`).FindAllStringSubmatch(string(body2), -1) {
 			term, _ := url.QueryUnescape(m[1])
@@ -2364,7 +2898,7 @@ func processLetters() {
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1 << 20))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		for _, m := range regexp.MustCompile(`/search/([^"]+)"[^>]*><strong>(\d+)`).FindAllStringSubmatch(string(body), -1) {
 			tag, _ := url.QueryUnescape(m[1])
@@ -2435,7 +2969,7 @@ func processPornstars() {
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1 << 20))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		for _, m := range regexp.MustCompile(`href="/pornstar/([^"]+)"`).FindAllStringSubmatch(string(body), -1) {
 			name := m[1]
@@ -2553,9 +3087,22 @@ func handleAPIRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", 400)
 		return
 	}
-	v, err := scrapeVideoDetail(id)
+	existing, ok := loadVideoFromDB(id)
+	source := "xnxx"
+	if ok {
+		source = existing.Source
+	}
+	v, err := scrapeVideoDetailForSource(id, source)
 	if err != nil {
+		recordScrapeFailure(id, err)
 		http.Error(w, err.Error(), 500)
+		return
+	}
+	normalizeVideoExpiry(&v)
+	if !hasPlayableMedia(v) {
+		err := fmt.Errorf("%s detail scrape returned no playable media for %s", v.Source, v.ID)
+		recordScrapeFailure(id, err)
+		http.Error(w, err.Error(), 502)
 		return
 	}
 	storeVideo(v)
@@ -2578,11 +3125,11 @@ func scrapeXnxxTagPage(query string) []Video {
 // --- XNXX Scraper ---
 
 var (
-	reVideoLink  = regexp.MustCompile(`<a[^>]*href="/video-([a-z0-9]+)/([^"]+)"`)
-	reJSONLD     = regexp.MustCompile(`<script[^>]*type="application/ld\+json"[^>]*>\s*(\{[\s\S]*?\})\s*</script>`)
-	reHLSSource  = regexp.MustCompile(`https://hls-cdn77\.xnxx-cdn\.com/([^"'\s]+,\d+)/([a-f0-9-]+)/\d+/hls\.m3u8`)
-	reThumbUUID  = regexp.MustCompile(`/([a-f0-9-]+)/\d+/(?:xn_\d+_t|preview)`)
-	reVidScript  = regexp.MustCompile(`video_url[^=]*=\s*'([^']+)'`) // JS variable fallback
+	reVideoLink = regexp.MustCompile(`<a[^>]*href="/video-([a-z0-9]+)/([^"]+)"`)
+	reJSONLD    = regexp.MustCompile(`<script[^>]*type="application/ld\+json"[^>]*>\s*(\{[\s\S]*?\})\s*</script>`)
+	reHLSSource = regexp.MustCompile(`https://hls-cdn77\.xnxx-cdn\.com/([^"'\s]+,\d+)/([a-f0-9-]+)/\d+/hls\.m3u8`)
+	reThumbUUID = regexp.MustCompile(`/([a-f0-9-]+)/\d+/(?:xn_\d+_t|preview)`)
+	reVidScript = regexp.MustCompile(`video_url[^=]*=\s*'([^']+)'`) // JS variable fallback
 
 	// html5player exposes the real per-quality URLs, EACH with its own secure
 	// token. xnxx no longer lets one token serve every quality, so these must be
@@ -2591,7 +3138,7 @@ var (
 	reSetUrlLow  = regexp.MustCompile(`setVideoUrlLow\(\s*['"]([^'"]+)['"]`)
 	reSetHLS     = regexp.MustCompile(`setVideoHLS\(\s*['"]([^'"]+)['"]`)
 	// Two filename generations: legacy video_{res}p.mp4 and 2026+ mp4_{label}.mp4 (sd/hq/hd/fhd)
-	reMP4Any     = regexp.MustCompile(`https://mp4-[^.]+\.xnxx-cdn\.com/([a-f0-9-]+)/\d+/(?:video_(\d+)p|mp4_([a-z0-9]+))\.mp4\?secure=([^"'\s\\]+)`)
+	reMP4Any = regexp.MustCompile(`https://mp4-[^.]+\.xnxx-cdn\.com/([a-f0-9-]+)/\d+/(?:video_(\d+)p|mp4_([a-z0-9]+))\.mp4\?secure=([^"'\s\\]+)`)
 )
 
 // assignMP4Quality stores a real player MP4 URL (with its own token) into the
@@ -2775,12 +3322,12 @@ func scrapeVideoDetail(id string) (Video, error) {
 	// JSON-LD — primary metadata source
 	if m := reJSONLD.FindStringSubmatch(html); len(m) > 1 {
 		var ld struct {
-			Name        string   `json:"name"`
-			Description string   `json:"description"`
-			ContentURL  string   `json:"contentUrl"`
-			Duration    string   `json:"duration"`
+			Name         string   `json:"name"`
+			Description  string   `json:"description"`
+			ContentURL   string   `json:"contentUrl"`
+			Duration     string   `json:"duration"`
 			ThumbnailURL []string `json:"thumbnailUrl"`
-			Interaction struct {
+			Interaction  struct {
 				Count int `json:"userInteractionCount"`
 			} `json:"interactionStatistic"`
 		}
@@ -2952,17 +3499,17 @@ var (
 )
 
 type xhThumb struct {
-	ID    int    `json:"id"`
-	Title string `json:"titleLocalized"`
-	PageURL string `json:"pageURL"`
-	ThumbURL string `json:"thumbURL"`
+	ID         int    `json:"id"`
+	Title      string `json:"titleLocalized"`
+	PageURL    string `json:"pageURL"`
+	ThumbURL   string `json:"thumbURL"`
 	TrailerURL string `json:"trailerURL"`
-	Duration int `json:"duration"`
-	Views int `json:"views"`
+	Duration   int    `json:"duration"`
+	Views      int    `json:"views"`
 }
 
 func httpGetXhWithRetry(urlStr string) (*http.Response, error) {
-	<-rateLimiter
+	<-rateLimitXh
 
 	var lastErr error
 	for attempt := 0; attempt < maxHTTPRetries; attempt++ {
@@ -3019,14 +3566,20 @@ func scrapeXhListing(pageURL string) []Video {
 
 	// Extract video pageURLs from window.initials JSON — id field no longer exists
 	for _, m := range regexp.MustCompile(`"pageURL"\s*:\s*"((?:[^"\\]|\\.)*)"`).FindAllStringSubmatch(string(body), -1) {
-		if len(m) < 2 { continue }
+		if len(m) < 2 {
+			continue
+		}
 		pageURL := strings.ReplaceAll(m[1], `\/`, `/`)
 
 		slugMatch := reXhSlugID.FindStringSubmatch(pageURL)
-		if slugMatch == nil { continue }
+		if slugMatch == nil {
+			continue
+		}
 		shortID := slugMatch[2]
 
-		if seen[shortID] { continue }
+		if seen[shortID] {
+			continue
+		}
 		seen[shortID] = true
 
 		v := Video{
@@ -3151,11 +3704,17 @@ func scrapeXhVideoDetail(shortID string) (Video, error) {
 			fmt.Sscanf(resMatch[1], "%d", &res)
 			switch {
 			case res <= 360:
-				if v.URL360 == "" { v.URL360 = mp4URL }
+				if v.URL360 == "" {
+					v.URL360 = mp4URL
+				}
 			case res <= 720:
-				if v.URL720 == "" { v.URL720 = mp4URL }
+				if v.URL720 == "" {
+					v.URL720 = mp4URL
+				}
 			default:
-				if v.URL1080 == "" { v.URL1080 = mp4URL }
+				if v.URL1080 == "" {
+					v.URL1080 = mp4URL
+				}
 			}
 		}
 		// Parse token expiry if not already set
@@ -3229,16 +3788,22 @@ func runXhCrawl() {
 
 			videos := scrapeXhListing(pageURL)
 			if len(videos) == 0 {
-				if page > 0 { break }
+				if page > 0 {
+					break
+				}
 				continue
 			}
 
 			for _, v := range videos {
-				if v.ID == "" || v.Slug == "" { continue }
+				if v.ID == "" || v.Slug == "" {
+					continue
+				}
 
 				var exists string
 				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-				if exists != "" { continue }
+				if exists != "" {
+					continue
+				}
 
 				// Insert stub
 				db.Exec(`INSERT OR IGNORE INTO videos (id, slug, title, source, added_at) VALUES (?,?,?,?,?)`,
@@ -3265,13 +3830,13 @@ func runXhCrawl() {
 
 var (
 	reEpVideoBlock  = regexp.MustCompile(`data-id="(\d+)"[^>]*>\s*<div class="mbimg">.*?<a href="([^"]*)"[^>]*>\s*<img src="([^"]*)"[^>]*>\s*</a>\s*(?:<div class="mvhdico"[^>]*><span>([^<]*)</span></div>)?.*?<p class="mbtit"><a[^>]*>([^<]*)</a></p>\s*<p class="mbstats">\s*<span class="mbtim"[^>]*>([^<]*)</span>\s*(?:<span class="mbrate"[^>]*>([^<]*)</span>)?\s*<span class="mbvie"[^>]*>([^<]*)</span>(?:\s*<span class="mb-uploader"><a[^>]*>([^<]*)</a></span>)?`)
-	reEpHashSlug   = regexp.MustCompile(`/video-([^/]+)/([^/]*)/?$`)
-	reEpMetaDesc   = regexp.MustCompile(`<meta name="description" content="([^"]*)"`)
-	reEpCatLinks   = regexp.MustCompile(`<a[^>]*href="/category/([^"]*)/"[^>]*title="([^"]*)"`)
-	reEpStarLinks  = regexp.MustCompile(`<a[^>]*href="/pornstar/([^"]*)/"[^>]*>([^<]*)</a>`)
-	reEpVideoURLs  = regexp.MustCompile(`https?://[^"'\s<>]*?xvideos\.com/video[^"'\s<>]*|/dload/[^"'\s<>]*|"embedUrl"\s*:\s*"([^"]*)"`)
+	reEpHashSlug    = regexp.MustCompile(`/video-([^/]+)/([^/]*)/?$`)
+	reEpMetaDesc    = regexp.MustCompile(`<meta name="description" content="([^"]*)"`)
+	reEpCatLinks    = regexp.MustCompile(`<a[^>]*href="/category/([^"]*)/"[^>]*title="([^"]*)"`)
+	reEpStarLinks   = regexp.MustCompile(`<a[^>]*href="/pornstar/([^"]*)/"[^>]*>([^<]*)</a>`)
+	reEpVideoURLs   = regexp.MustCompile(`https?://[^"'\s<>]*?xvideos\.com/video[^"'\s<>]*|/dload/[^"'\s<>]*|"embedUrl"\s*:\s*"([^"]*)"`)
 	reEpDurationSec = regexp.MustCompile(`(\d+)\s*min`)
-	reEpRdate      = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
+	reEpRdate       = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
 )
 
 func httpGetEpWithRetry(urlStr string) (*http.Response, error) {
@@ -3280,7 +3845,9 @@ func httpGetEpWithRetry(urlStr string) (*http.Response, error) {
 	for attempt := 0; attempt < maxHTTPRetries; attempt++ {
 		if attempt > 0 {
 			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
-			if delay > retryMaxDelay { delay = retryMaxDelay }
+			if delay > retryMaxDelay {
+				delay = retryMaxDelay
+			}
 			time.Sleep(delay + time.Duration(rand.Intn(1000))*time.Millisecond)
 		}
 		req, _ := http.NewRequest("GET", urlStr, nil)
@@ -3295,7 +3862,9 @@ func httpGetEpWithRetry(urlStr string) (*http.Response, error) {
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			resp.Body.Close()
-			if attempt == maxHTTPRetries-1 { return nil, fmt.Errorf("HTTP %d", resp.StatusCode) }
+			if attempt == maxHTTPRetries-1 {
+				return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
 			continue
 		}
 		return resp, nil
@@ -3318,7 +3887,9 @@ func scrapeEpListing(pageURL string) []Video {
 
 	blocks := reEpVideoBlock.FindAllStringSubmatch(bodyStr, -1)
 	for _, m := range blocks {
-		if len(m) < 8 { continue }
+		if len(m) < 8 {
+			continue
+		}
 		id := m[1]
 		href := m[2]
 		thumbURL := m[3]
@@ -3328,10 +3899,14 @@ func scrapeEpListing(pageURL string) []Video {
 		rating := m[7]
 		viewsStr := m[8]
 		uploader := ""
-		if len(m) > 9 { uploader = m[9] }
+		if len(m) > 9 {
+			uploader = m[9]
+		}
 
 		hm := reEpHashSlug.FindStringSubmatch(href)
-		if hm == nil || seen[id] { continue }
+		if hm == nil || seen[id] {
+			continue
+		}
 		hash := hm[1]
 		slug := hm[2]
 		seen[id] = true
@@ -3394,7 +3969,9 @@ func scrapeEpVideoDetail(hash string) (Video, error) {
 
 	url := epBase + "/video-" + hash + "/"
 	resp, err := httpGetEpWithRetry(url)
-	if err != nil { return v, err }
+	if err != nil {
+		return v, err
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
 	resp.Body.Close()
 	bodyStr := string(body)
@@ -3423,12 +4000,16 @@ func scrapeEpVideoDetail(hash string) (Video, error) {
 	// Categories
 	catMatches := reEpCatLinks.FindAllStringSubmatch(bodyStr, -1)
 	for _, cm := range catMatches {
-		if len(cm) > 2 { v.Categories = append(v.Categories, cm[2]) }
+		if len(cm) > 2 {
+			v.Categories = append(v.Categories, cm[2])
+		}
 	}
 	// Pornstars as tags
 	starMatches := reEpStarLinks.FindAllStringSubmatch(bodyStr, -1)
 	for _, sm := range starMatches {
-		if len(sm) > 2 { v.Tags = append(v.Tags, strings.TrimSpace(sm[2])) }
+		if len(sm) > 2 {
+			v.Tags = append(v.Tags, strings.TrimSpace(sm[2]))
+		}
 	}
 
 	// Extract title from og:title or h1
@@ -3467,7 +4048,9 @@ func runEpCrawl() {
 	for _, cat := range seedCatsForCrawl {
 		for page := 0; page < 20; page++ {
 			pageURL := epBase + "/"
-			if cat != "" { pageURL = epBase + "/" + cat + "/" }
+			if cat != "" {
+				pageURL = epBase + "/" + cat + "/"
+			}
 			if page > 0 {
 				if cat != "" {
 					pageURL = fmt.Sprintf("%s/%d/", epBase+"/"+cat, page)
@@ -3478,17 +4061,23 @@ func runEpCrawl() {
 
 			videos := scrapeEpListing(pageURL)
 			if len(videos) == 0 {
-				if page > 0 { break }
+				if page > 0 {
+					break
+				}
 				continue
 			}
 
 			for _, v := range videos {
-				if v.ID == "" || seen[v.ID] { continue }
+				if v.ID == "" || seen[v.ID] {
+					continue
+				}
 				seen[v.ID] = true
 
 				var exists string
 				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-				if exists != "" { continue }
+				if exists != "" {
+					continue
+				}
 
 				cats := strings.Join(extractCategories(v.Title, v.Description, v.Tags), ",")
 				db.Exec(`INSERT OR IGNORE INTO videos (id, slug, title, description, categories, tags, uploader, duration, views, source, thumb_uuid, added_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -3514,19 +4103,31 @@ func handleAPICrawlEp(w http.ResponseWriter, r *http.Request) {
 }
 
 func scrapeNewVideoDetails() {
-	rows, err := db.Query("SELECT id, slug FROM videos WHERE url_360 = '' OR url_360 IS NULL OR thumb_uuid = '' OR thumb_uuid IS NULL OR (url_360 != '' AND expires_at = 0)")
+	now := time.Now().Unix()
+	rows, err := db.Query(`SELECT v.id, COALESCE(v.source, 'xnxx')
+		FROM videos v
+		LEFT JOIN scrape_failures f ON f.video_id = v.id
+		WHERE (
+			COALESCE(v.url_360,'') = ''
+			AND COALESCE(v.url_720,'') = ''
+			AND COALESCE(v.url_1080,'') = ''
+			AND COALESCE(v.hls_url,'') = ''
+		)
+		AND (f.video_id IS NULL OR f.next_retry_at <= ? OR f.retry_count >= ?)
+		ORDER BY COALESCE(f.retry_count, 0) ASC, v.added_at DESC
+		LIMIT ?`, now, maxScrapeFailuresBeforeDelete, backfillBatchSize)
 	if err != nil {
 		log.Printf("Query for unscraped videos failed: %v", err)
 		return
 	}
 	defer rows.Close()
 
-	type pending struct{ id, slug string }
+	type pending struct{ id, source string }
 	var pendingList []pending
 	for rows.Next() {
-		var id, slug string
-		rows.Scan(&id, &slug)
-		pendingList = append(pendingList, pending{id, slug})
+		var id, source string
+		rows.Scan(&id, &source)
+		pendingList = append(pendingList, pending{id, source})
 	}
 	rows.Close()
 
@@ -3544,18 +4145,25 @@ func scrapeNewVideoDetails() {
 	var wg sync.WaitGroup
 	for i, p := range pendingList {
 		if i > 0 {
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
 		}
 		wg.Add(1)
 		scrapeSem <- struct{}{}
-		go func(id, slug string) {
+		go func(id, source string) {
 			defer wg.Done()
 			defer func() { <-scrapeSem }()
-			detail, err := scrapeVideoDetail(id)
+			detail, err := scrapeVideoDetailForSource(id, source)
 			if err != nil {
-				log.Printf("Detail scrape failed for %s: %v", id, err)
+				log.Printf("Detail scrape failed for %s (%s): %v", id, source, err)
 				recordScrapeFailure(id, err)
 				time.Sleep(2 * time.Second)
+				return
+			}
+			normalizeVideoExpiry(&detail)
+			if !hasPlayableMedia(detail) {
+				err := fmt.Errorf("%s detail scrape returned no playable media", source)
+				log.Printf("Detail scrape found no media for %s (%s)", id, source)
+				recordScrapeFailure(id, err)
 				return
 			}
 			storeVideo(detail)
@@ -3568,7 +4176,7 @@ func scrapeNewVideoDetails() {
 			if d%10 == 0 {
 				log.Printf("Detail scrape progress: %d/%d", d, t)
 			}
-		}(p.id, p.slug)
+		}(p.id, p.source)
 	}
 	wg.Wait()
 	bgWg.Done()
@@ -3630,6 +4238,7 @@ func httpGetWithRetry(urlStr string) (*http.Response, error) {
 func recordScrapeFailure(videoID string, scrapeErr error) {
 	var retryCount int
 	db.QueryRow("SELECT retry_count FROM scrape_failures WHERE video_id = ?", videoID).Scan(&retryCount)
+	nextCount := retryCount + 1
 	delay := int64(failureBaseDelay.Seconds())
 	for i := 0; i < retryCount; i++ {
 		delay *= 2
@@ -3640,7 +4249,10 @@ func recordScrapeFailure(videoID string, scrapeErr error) {
 	}
 	nextRetry := time.Now().Unix() + delay
 	db.Exec("INSERT OR REPLACE INTO scrape_failures (video_id, retry_count, last_error, next_retry_at) VALUES (?,?,?,?)",
-		videoID, retryCount+1, scrapeErr.Error(), nextRetry)
+		videoID, nextCount, scrapeErr.Error(), nextRetry)
+	if nextCount >= maxScrapeFailuresBeforeDelete {
+		pruneFailedVideoIfUnplayable(videoID, scrapeErr.Error())
+	}
 }
 
 func clearScrapeFailure(videoID string) {
@@ -3655,7 +4267,10 @@ func retryFailedScrapes() {
 	}
 	defer rows.Close()
 
-	type retryEntry struct{ id string; count int }
+	type retryEntry struct {
+		id    string
+		count int
+	}
 	var entries []retryEntry
 	for rows.Next() {
 		var e retryEntry
@@ -3668,32 +4283,29 @@ func retryFailedScrapes() {
 
 	log.Printf("Retrying %d previously failed scrapes...", len(entries))
 	for _, e := range entries {
-	<-rateLimitXh
-		v, err := scrapeVideoDetail(e.id)
-		if err != nil {
-			delay := int64(failureBaseDelay.Seconds())
-			for i := 0; i < e.count+1; i++ {
-				delay *= 2
-				if delay > int64(failureMaxDelay.Seconds()) {
-					delay = int64(failureMaxDelay.Seconds())
-					break
-				}
-			}
-			nextRetry := time.Now().Unix() + delay
-			db.Exec("UPDATE scrape_failures SET retry_count = retry_count + 1, last_error = ?, next_retry_at = ? WHERE video_id = ?",
-				err.Error(), nextRetry, e.id)
-			log.Printf("Retry failed for %s (attempt %d): %v", e.id, e.count+1, err)
+		time.Sleep(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
+		v, ok := loadVideoFromDB(e.id)
+		if !ok {
+			clearScrapeFailure(e.id)
 			continue
 		}
-		storeVideo(v)
-		clearScrapeFailure(e.id)
-		setCachedVideo(e.id, v)
-		log.Printf("Retry succeeded for %s", e.id)
+		if e.count >= maxScrapeFailuresBeforeDelete {
+			pruneFailedVideoIfUnplayable(e.id, "retry limit reached")
+			if _, ok := loadVideoFromDB(e.id); !ok {
+				continue
+			}
+		}
+		refreshed, err := ensureFreshVideo(v, tokenRefreshLead)
+		if err != nil {
+			log.Printf("Retry failed for %s (%s, attempt %d): %v", e.id, v.Source, e.count+1, err)
+			continue
+		}
+		log.Printf("Retry succeeded for %s (%s)", refreshed.ID, refreshed.Source)
 	}
 }
 
 func retryFailedLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(retryFailedEvery)
 	defer ticker.Stop()
 	for {
 		select {

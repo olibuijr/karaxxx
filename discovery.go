@@ -13,7 +13,7 @@ func handleAPIRandom(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	cat := r.URL.Query().Get("cat")
 	query := "SELECT id FROM videos"
-	var clauses []string
+	clauses := []string{playableMediaSQL}
 	var args []interface{}
 	if source != "" {
 		clauses = append(clauses, "source = ?")
@@ -69,7 +69,7 @@ func handleAPIRelated(w http.ResponseWriter, r *http.Request) {
 		if len(catClauses) > 0 {
 			catArgs = append(catArgs, videoID, limit)
 			rows, err := db.Query(
-				"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE ("+strings.Join(catClauses, " OR ")+") AND id != ? ORDER BY views DESC LIMIT ?",
+				"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE ("+strings.Join(catClauses, " OR ")+") AND id != ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT ?",
 				catArgs...)
 			if err == nil {
 				defer rows.Close()
@@ -93,7 +93,7 @@ func handleAPIRelated(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(related) == 0 {
 		rows, err := db.Query(
-			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE id != ? AND source = ? ORDER BY views DESC LIMIT ?",
+			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE id != ? AND source = ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT ?",
 			videoID, vSource, limit)
 		if err == nil {
 			defer rows.Close()
@@ -125,7 +125,7 @@ func handleAPITags(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tagCounts := map[string]int{}
-	rows, err := db.Query("SELECT tags FROM videos WHERE tags != '' AND tags IS NOT NULL LIMIT 5000")
+	rows, err := db.Query("SELECT tags FROM videos WHERE tags != '' AND tags IS NOT NULL AND " + playableMediaSQL + " LIMIT 5000")
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

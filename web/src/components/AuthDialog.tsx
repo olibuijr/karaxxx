@@ -10,6 +10,7 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [inviteKey, setInviteKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -18,16 +19,17 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
     if (!username || !password) return
     setError('')
     setBusy(true)
-    const ok = mode === 'login'
+    const result = mode === 'login'
       ? await login(username, password)
-      : await register(username, password)
+      : await register(username, password, inviteKey)
     setBusy(false)
-    if (ok) {
+    if (result.ok) {
       onClose()
       setUsername('')
       setPassword('')
+      setInviteKey('')
     } else {
-      setError(mode === 'register' ? 'Username taken or password too short' : 'Invalid credentials')
+      setError(result.error || (mode === 'register' ? 'Invite or account details were not accepted' : 'Invalid credentials'))
     }
   }
 
@@ -63,8 +65,21 @@ export default function AuthDialog({ open, onClose }: { open: boolean; onClose: 
               required
               minLength={4}
             />
-          </div>
-          {error && <p className="text-red text-xs">{error}</p>}
+	          </div>
+	          {mode === 'register' && (
+	            <div className="space-y-2">
+	              <Label htmlFor="invite-key" className="text-muted">Invite key</Label>
+	              <Input
+	                id="invite-key"
+	                value={inviteKey}
+	                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInviteKey(e.target.value)}
+	                className="bg-bg border-border text-text"
+	                autoComplete="one-time-code"
+	                required
+	              />
+	            </div>
+	          )}
+	          {error && <p className="text-red text-xs">{error}</p>}
           <Button
             type="submit"
             disabled={busy}

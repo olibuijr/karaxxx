@@ -112,6 +112,12 @@ export default function VideoCard({ video }: { video: Video }) {
           {video.views > 0 && (
             <span className="text-[11px] text-muted">{formatViews(video.views)} views</span>
           )}
+          {video.watch_count != null && video.watch_count > 0 && (
+            <>
+              <span className="text-[11px] text-muted">·</span>
+              <span className="text-[11px] text-muted">{formatViews(video.watch_count)} watched</span>
+            </>
+          )}
           {video.upload_date && (
             <>
               <span className="text-[11px] text-muted">·</span>

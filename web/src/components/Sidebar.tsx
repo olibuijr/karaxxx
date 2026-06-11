@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { fetchCategories, fetchTags } from '../api'
 import type { TagCount, Video } from '../types'
 import { useAuth } from '../lib/auth'
+import CategoryIcon from './CategoryIcon'
 
 type Sort = 'recent' | 'new' | 'views' | 'duration'
 
@@ -101,7 +102,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                     : 'text-muted hover:text-text hover:bg-white/5'
                   }`}
     >
-      <span className="truncate">{c}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        <CategoryIcon category={c} className="h-3.5 w-3.5 flex-shrink-0 text-orange/80" />
+        <span className="truncate">{c}</span>
+      </span>
       {token && (
         <button
           onClick={(e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); togglePin(c) }}
@@ -263,7 +267,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                           : 'text-muted hover:text-text hover:bg-white/5'
                         }`}
           >
-            All videos
+            <span className="flex items-center gap-2">
+              <CategoryIcon className="h-3.5 w-3.5 text-orange/80" />
+              All videos
+            </span>
           </Link>
           {pinnedCats.filter(c => cats.includes(c) && visibleCats.includes(c)).length > 0 && unpinnedCats.length === 0 && (
             <span className="px-3 py-1 text-[11px] text-muted">—</span>

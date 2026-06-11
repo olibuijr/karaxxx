@@ -5,6 +5,7 @@ import type { Video } from '../types'
 import FavoriteButton from '../components/FavoriteButton'
 import RatingButtons from '../components/RatingButtons'
 import PlaylistButton from '../components/PlaylistButton'
+import VideoSocialPanel from '../components/VideoSocialPanel'
 import { toast } from 'sonner'
 import { useAuth } from '../lib/auth'
 
@@ -90,7 +91,7 @@ export default function Play() {
       const pos = Math.floor(vid.currentTime)
       fetch(`/api/watch/${id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ position: pos }),
       }).catch(() => {})
     }
@@ -100,7 +101,7 @@ export default function Play() {
         if (!vid.paused) {
           fetch(`/api/watch/${id}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({ position: Math.floor(vid.currentTime) }),
           }).catch(() => {})
         }
@@ -125,6 +126,15 @@ export default function Play() {
       vid.removeEventListener('seeking', onSeeking)
     }
   }, [id, token, quality])
+
+  useEffect(() => {
+    if (!id || !token) return
+    fetch(`/api/watch/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ event: 'play' }),
+    }).catch(() => {})
+  }, [id, token])
 
   useEffect(() => {
     if (!id || !token) return
@@ -349,6 +359,12 @@ export default function Play() {
 
         <div className="flex flex-wrap items-center gap-3 text-sm text-muted">
           {v.views > 0 && <span>{formatViews(v.views)} views</span>}
+          {v.watch_count != null && v.watch_count > 0 && (
+            <>
+              <span className="text-border">|</span>
+              <span>{formatViews(v.watch_count)} KaraXXX watches</span>
+            </>
+          )}
           {v.duration > 0 && (
             <>
               <span className="text-border">|</span>
@@ -431,6 +447,10 @@ export default function Play() {
 
         {v.description && (
           <p className="text-sm text-muted leading-relaxed max-w-prose">{v.description}</p>
+        )}
+
+        {id && (
+          <VideoSocialPanel videoId={id} token={token} initialWatchCount={v.watch_count || 0} />
         )}
       </div>
     </div>

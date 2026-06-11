@@ -69,7 +69,7 @@ func handleForYou(w http.ResponseWriter, r *http.Request) {
 
 	if len(weightedCats) == 0 {
 		rows, err = db.Query(
-			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos ORDER BY views DESC LIMIT ?", limit)
+			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE "+playableMediaSQL+" ORDER BY views DESC LIMIT ?", limit)
 		if err == nil {
 			defer rows.Close()
 			videos := []Video{}
@@ -80,8 +80,12 @@ func handleForYou(w http.ResponseWriter, r *http.Request) {
 				rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
 				vv.Duration = int(dur.Int64)
 				vv.Views = int(views.Int64)
-				if cats.Valid && cats.String != "" { vv.Categories = strings.Split(cats.String, ",") }
-				if uploadDate.Valid { vv.UploadDate = uploadDate.String }
+				if cats.Valid && cats.String != "" {
+					vv.Categories = strings.Split(cats.String, ",")
+				}
+				if uploadDate.Valid {
+					vv.UploadDate = uploadDate.String
+				}
 				videos = append(videos, vv)
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{"videos": videos, "reason": "trending"})
@@ -99,9 +103,10 @@ func handleForYou(w http.ResponseWriter, r *http.Request) {
 
 	rows, err = db.Query(
 		`SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v
-		 WHERE (`+strings.Join(catClauses, " OR ")+`)
-		 AND v.id NOT IN (SELECT video_id FROM watch_history WHERE user_id = ?)
-		 AND v.id NOT IN (SELECT video_id FROM favorites WHERE user_id = ?)
+			 WHERE (`+strings.Join(catClauses, " OR ")+`)
+			 AND `+playableMediaSQLV+`
+			 AND v.id NOT IN (SELECT video_id FROM watch_history WHERE user_id = ?)
+			 AND v.id NOT IN (SELECT video_id FROM favorites WHERE user_id = ?)
 		 ORDER BY v.views DESC LIMIT ?`, catArgs...)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -121,8 +126,12 @@ func handleForYou(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
 		vv.Duration = int(dur.Int64)
 		vv.Views = int(views.Int64)
-		if cats.Valid && cats.String != "" { vv.Categories = strings.Split(cats.String, ",") }
-		if uploadDate.Valid { vv.UploadDate = uploadDate.String }
+		if cats.Valid && cats.String != "" {
+			vv.Categories = strings.Split(cats.String, ",")
+		}
+		if uploadDate.Valid {
+			vv.UploadDate = uploadDate.String
+		}
 		reason := ""
 		if len(vv.Categories) > 0 {
 			reason = "Because you liked " + vv.Categories[0]
@@ -150,7 +159,7 @@ func handleSuggestions(w http.ResponseWriter, r *http.Request) {
 		var cat string
 		rows.Scan(&cat)
 		vrows, err := db.Query(
-			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE categories LIKE ? ORDER BY views DESC LIMIT 3",
+			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE categories LIKE ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT 3",
 			"%"+cat+"%")
 		if err != nil {
 			continue
@@ -163,8 +172,12 @@ func handleSuggestions(w http.ResponseWriter, r *http.Request) {
 			vrows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
 			vv.Duration = int(dur.Int64)
 			vv.Views = int(views.Int64)
-			if cats.Valid && cats.String != "" { vv.Categories = strings.Split(cats.String, ",") }
-			if uploadDate.Valid { vv.UploadDate = uploadDate.String }
+			if cats.Valid && cats.String != "" {
+				vv.Categories = strings.Split(cats.String, ",")
+			}
+			if uploadDate.Valid {
+				vv.UploadDate = uploadDate.String
+			}
 			vids = append(vids, vv)
 		}
 		vrows.Close()
@@ -208,7 +221,7 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 
 	topCategories := []map[string]interface{}{}
 	topCatRows, err := db.Query(
-		`SELECT v.categories, COUNT(*) as cnt FROM watch_history wh JOIN videos v ON wh.video_id = v.id WHERE wh.user_id = ? AND v.categories != '' AND v.categories IS NOT NULL GROUP BY v.categories ORDER BY cnt DESC LIMIT 5`, uid)
+		`SELECT v.categories, COUNT(*) as cnt FROM watch_history wh JOIN videos v ON wh.video_id = v.id WHERE wh.user_id = ? AND v.categories != '' AND v.categories IS NOT NULL AND `+playableMediaSQLV+` GROUP BY v.categories ORDER BY cnt DESC LIMIT 5`, uid)
 	if err == nil {
 		defer topCatRows.Close()
 		for topCatRows.Next() {
@@ -227,7 +240,7 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 	recentWatched := []Video{}
 	recentRows, err := db.Query(
 		`SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source
-		 FROM watch_history wh JOIN videos v ON wh.video_id = v.id WHERE wh.user_id = ? ORDER BY wh.updated_at DESC LIMIT 5`, uid)
+			 FROM watch_history wh JOIN videos v ON wh.video_id = v.id WHERE wh.user_id = ? AND `+playableMediaSQLV+` ORDER BY wh.updated_at DESC LIMIT 5`, uid)
 	if err == nil {
 		defer recentRows.Close()
 		for recentRows.Next() {
@@ -237,8 +250,12 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 			recentRows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
 			vv.Duration = int(dur.Int64)
 			vv.Views = int(views.Int64)
-			if cats.Valid && cats.String != "" { vv.Categories = strings.Split(cats.String, ",") }
-			if uploadDate.Valid { vv.UploadDate = uploadDate.String }
+			if cats.Valid && cats.String != "" {
+				vv.Categories = strings.Split(cats.String, ",")
+			}
+			if uploadDate.Valid {
+				vv.UploadDate = uploadDate.String
+			}
 			recentWatched = append(recentWatched, vv)
 		}
 	}
@@ -246,7 +263,7 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 	topRated := []Video{}
 	topRows, err := db.Query(
 		`SELECT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source
-		 FROM ratings r JOIN videos v ON r.video_id = v.id WHERE r.user_id = ? AND r.rating = 1 ORDER BY r.created_at DESC LIMIT 5`, uid)
+			 FROM ratings r JOIN videos v ON r.video_id = v.id WHERE r.user_id = ? AND r.rating = 1 AND `+playableMediaSQLV+` ORDER BY r.created_at DESC LIMIT 5`, uid)
 	if err == nil {
 		defer topRows.Close()
 		for topRows.Next() {
@@ -256,8 +273,12 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 			topRows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &cats, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &uploadDate, &vv.Source)
 			vv.Duration = int(dur.Int64)
 			vv.Views = int(views.Int64)
-			if cats.Valid && cats.String != "" { vv.Categories = strings.Split(cats.String, ",") }
-			if uploadDate.Valid { vv.UploadDate = uploadDate.String }
+			if cats.Valid && cats.String != "" {
+				vv.Categories = strings.Split(cats.String, ",")
+			}
+			if uploadDate.Valid {
+				vv.UploadDate = uploadDate.String
+			}
 			topRated = append(topRated, vv)
 		}
 	}
@@ -274,17 +295,17 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"username":                un,
-		"account_age_days":        int(accountAge),
-		"total_watched":           totalWatched,
+		"username":                 un,
+		"account_age_days":         int(accountAge),
+		"total_watched":            totalWatched,
 		"total_watch_time_seconds": totalWatchTime,
-		"favorite_categories":     favCats,
-		"top_categories":          topCategories,
-		"playlist_count":          playlistCount,
-		"favorite_count":          favCount,
-		"ratings_given":           ratingsGiven,
-		"rating_ratio":            ratingRatio,
-		"recently_watched":        recentWatched,
-		"top_rated":               topRated,
+		"favorite_categories":      favCats,
+		"top_categories":           topCategories,
+		"playlist_count":           playlistCount,
+		"favorite_count":           favCount,
+		"ratings_given":            ratingsGiven,
+		"rating_ratio":             ratingRatio,
+		"recently_watched":         recentWatched,
+		"top_rated":                topRated,
 	})
 }

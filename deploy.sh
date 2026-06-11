@@ -9,6 +9,27 @@ SERVER="root@192.168.8.4"
 SERVER_DIR="/opt/karaxxx"
 SERVICE="karaxxx"
 VERSION_FILE="VERSION"
+HEALTH_URL="http://127.0.0.1:8799/api/health"
+
+service_unit() {
+  if [[ "$SERVICE" == *.service ]]; then
+    echo "$SERVICE"
+  else
+    echo "$SERVICE.service"
+  fi
+}
+
+remote_systemctl() {
+  ssh "$SERVER" "systemctl $*"
+}
+
+remote_journal_tail() {
+  ssh "$SERVER" "journalctl -u $(service_unit) --no-pager -n 40" || true
+}
+
+remote_curl() {
+  ssh "$SERVER" "curl -fsS --max-time 3 $*"
+}
 
 usage() {
   cat <<'EOF'
@@ -18,10 +39,10 @@ Commands:
   build         Build the Go binary
   build-web     Build the React frontend
   build-all     Build Go binary + React frontend
-  push          Push binary + web build to server
+  push          Stop service, then push binary + web build to server
   push-web      Push only web frontend to server
   restart       Restart the karaxxx service
-  deploy [ver]  Full deploy: build-all + push + restart (optionally bump version)
+  deploy [ver]  Full deploy: build-all + version/changelog update + push + restart
   status        Show server service status
   version       Show current version
   bump <ver>    Bump version (e.g. ./deploy.sh bump 1.2.0)
@@ -38,10 +59,57 @@ current_version() {
   fi
 }
 
+next_patch_version() {
+  local current major minor patch
+  current="$(current_version)"
+  IFS='.' read -r major minor patch <<< "$current"
+  major="${major:-0}"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+  if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]]; then
+    echo "0.0.1"
+    return
+  fi
+  echo "$major.$minor.$((patch + 1))"
+}
+
 bump_version() {
   local v="$1"
   echo "$v" > "$VERSION_FILE"
   echo "Version bumped to $v"
+}
+
+changelog_has_version() {
+  local v="$1"
+  [[ -f CHANGELOG.md ]] && grep -q "^## \\[$v\\]" CHANGELOG.md
+}
+
+prepend_changelog_entry() {
+  local v="$1"
+  local notes="${KARAXXX_RELEASE_NOTES:-Release deployed through deploy.sh.}"
+  if changelog_has_version "$v"; then
+    echo "Changelog already contains $v"
+    return
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  {
+    echo "# Changelog"
+    echo
+    echo "## [$v] — $(date +%F)"
+    echo
+    echo "### Changed"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && echo "- $line"
+    done <<< "$notes"
+    echo
+    if [[ -f CHANGELOG.md ]]; then
+      tail -n +3 CHANGELOG.md
+    fi
+  } > "$tmp"
+  mv "$tmp" CHANGELOG.md
+  echo "Changelog updated for $v"
 }
 
 build_go() {
@@ -64,9 +132,36 @@ build_all() {
   build_web
 }
 
+verify_systemd_service() {
+  local unit
+  unit="$(service_unit)"
+  echo "=== Verifying systemd unit: $unit ==="
+  remote_systemctl "cat $unit --no-pager" >/dev/null
+  local load_state
+  load_state="$(remote_systemctl "show $unit -p LoadState --value --no-pager")"
+  if [[ "$load_state" != "loaded" ]]; then
+    echo "Systemd unit $unit is not loaded (LoadState=$load_state)"
+    remote_systemctl "status $unit --no-pager -l" || true
+    exit 1
+  fi
+  echo "  $unit is loaded"
+}
+
+stop_service() {
+  local unit
+  unit="$(service_unit)"
+  echo "=== Stopping $unit ==="
+  if ! remote_systemctl "stop $unit"; then
+    echo "Failed to stop $unit"
+    remote_systemctl "status $unit --no-pager -l" || true
+    remote_journal_tail
+    exit 1
+  fi
+  echo "  $unit stopped"
+}
+
 push_binary() {
   echo "=== Pushing to $SERVER ==="
-  ssh "$SERVER" "systemctl stop $SERVICE" || true
   scp "$BINARY" "$SERVER:$SERVER_DIR/"
   echo "  Binary pushed"
 }
@@ -79,22 +174,53 @@ push_web() {
   echo "  Frontend pushed to $SERVER_DIR/web/dist/"
 }
 
+push_release_files() {
+  echo "=== Pushing release metadata ==="
+  ssh "$SERVER" "mkdir -p $SERVER_DIR"
+  scp "$VERSION_FILE" CHANGELOG.md "$SERVER:$SERVER_DIR/"
+  echo "  VERSION and CHANGELOG.md pushed"
+}
+
 push_all() {
   push_binary
   push_web
+  push_release_files
 }
 
 restart_service() {
-  echo "=== Restarting $SERVICE ==="
-  ssh "$SERVER" "systemctl restart $SERVICE"
+  local unit
+  unit="$(service_unit)"
+  echo "=== Restarting $unit ==="
+  if ! remote_systemctl "restart $unit"; then
+    echo "Failed to restart $unit"
+    remote_systemctl "status $unit --no-pager -l" || true
+    remote_journal_tail
+    exit 1
+  fi
+  for _ in {1..30}; do
+    if remote_systemctl "is-active --quiet $unit" && remote_curl "$HEALTH_URL" >/dev/null 2>&1; then
+      echo "  $unit is active and HTTP-ready"
+      echo "--- Status ---"
+      remote_systemctl "status $unit --no-pager -l"
+      return
+    fi
+    sleep 1
+  done
+  echo "$unit did not become HTTP-ready after restart"
   echo "--- Status ---"
-  ssh "$SERVER" "systemctl status $SERVICE --no-pager -l" || true
+  remote_systemctl "status $unit --no-pager -l" || true
+  echo "--- Health probe ---"
+  remote_curl "-i $HEALTH_URL" || true
+  remote_journal_tail
+  exit 1
 }
 
 show_status() {
-  ssh "$SERVER" "systemctl status $SERVICE --no-pager -l" || true
+  local unit
+  unit="$(service_unit)"
+  remote_systemctl "status $unit --no-pager -l" || true
   echo
-  ssh "$SERVER" "journalctl -u $SERVICE --no-pager -n 10" || true
+  remote_journal_tail
 }
 
 show_changelog() {
@@ -106,11 +232,12 @@ show_changelog() {
 }
 
 do_deploy() {
-  local ver="${1:-}"
-  if [[ -n "$ver" ]]; then
-    bump_version "$ver"
-  fi
+  local ver="${1:-$(next_patch_version)}"
   build_all
+  bump_version "$ver"
+  prepend_changelog_entry "$ver"
+  verify_systemd_service
+  stop_service
   push_all
   restart_service
   echo
@@ -126,7 +253,7 @@ case "$CMD" in
   build)       build_go ;;
   build-web)   build_web ;;
   build-all)   build_all ;;
-  push)        push_all ;;
+  push)        verify_systemd_service; stop_service; push_all ;;
   push-binary) push_binary ;;
   push-web)    push_web ;;
   restart)     restart_service ;;

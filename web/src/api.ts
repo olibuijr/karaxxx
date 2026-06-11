@@ -1,4 +1,4 @@
-import type { BrowseParams, BrowseResponse, CrawlProgress, Video } from './types'
+import type { BrowseParams, BrowseResponse, ChangelogInfo, CrawlProgress, ProfileSettings, Video, VideoSocial } from './types'
 
 const BASE = '/api'
 
@@ -46,6 +46,12 @@ export function subscribeProgress(onProgress: (p: CrawlProgress) => void): () =>
     } catch { /* ignore malformed */ }
   }
   return () => evtSource.close()
+}
+
+export async function fetchChangelog(): Promise<ChangelogInfo> {
+  const res = await fetch(`${BASE}/changelog`)
+  if (!res.ok) throw new Error(`Changelog failed: ${res.status}`)
+  return res.json()
 }
 
 export function formatDuration(secs: number): string {
@@ -114,6 +120,68 @@ export async function addToPlaylist(token: string, playlistId: number, videoId: 
 
 export async function fetchProfile(token: string): Promise<any> {
   const res = await fetch(`${BASE}/profile`, { headers: { Authorization: `Bearer ${token}` } })
+  return res.json()
+}
+
+export async function fetchProfileSettings(token: string): Promise<ProfileSettings> {
+  const res = await fetch(`${BASE}/profile/settings`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error('Profile settings failed')
+  return res.json()
+}
+
+export async function updateProfileSettings(token: string, body: Pick<ProfileSettings, 'display_name' | 'comment_anonymously'>): Promise<ProfileSettings> {
+  const res = await fetch(`${BASE}/profile/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error('Profile settings update failed')
+  return res.json()
+}
+
+export async function fetchVideoSocial(id: string, token: string): Promise<VideoSocial> {
+  const res = await fetch(`${BASE}/social/video/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error('Social data failed')
+  return res.json()
+}
+
+export async function postVideoComment(id: string, token: string, body: string): Promise<VideoSocial> {
+  const res = await fetch(`${BASE}/social/video/${encodeURIComponent(id)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ body }),
+  })
+  if (!res.ok) throw new Error('Comment failed')
+  return res.json()
+}
+
+export async function toggleVideoReaction(id: string, token: string, reaction: string): Promise<VideoSocial> {
+  const res = await fetch(`${BASE}/social/video/${encodeURIComponent(id)}/reactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ reaction }),
+  })
+  if (!res.ok) throw new Error('Reaction failed')
+  return res.json()
+}
+
+export async function fetchWall(username: string, token: string): Promise<any> {
+  const res = await fetch(`${BASE}/wall/${encodeURIComponent(username)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error('Wall failed')
+  return res.json()
+}
+
+export async function postWallComment(username: string, token: string, body: string): Promise<any> {
+  const res = await fetch(`${BASE}/wall/${encodeURIComponent(username)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ body }),
+  })
+  if (!res.ok) throw new Error('Wall comment failed')
   return res.json()
 }
 
