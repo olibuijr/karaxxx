@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.7] — 2026-06-11
+
+### Changed
+- Categories expanded, density options, sidebar collapsible, full-width header
+
 ## [0.3.6] — 2026-06-11
 
 ### Changed
