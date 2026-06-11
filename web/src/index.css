@@ -216,6 +216,11 @@ video[data-preview].playing {
   font-size: 0.52rem;
 }
 
+.brand-logo3d--nav .brand-logo3d__word {
+  transform: none;
+  filter: none;
+}
+
 .brand-logo3d--hero .brand-logo3d__word {
   font-size: clamp(4.4rem, 14vw, 7.4rem);
 }

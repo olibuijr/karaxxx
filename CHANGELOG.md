@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.8] — 2026-06-11
+
+### Changed
+- Redesigned login/setup page with hero layout, benefit bullets, collapsible privacy details
+
 ## [0.3.7] — 2026-06-11
 
 ### Changed
