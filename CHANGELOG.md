@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.18] — 2026-06-11
+
+### Changed
+- Security hardening: removed secret-leaking debug endpoint, SSRF/path-traversal guards, JWT cookie auth + env secret, bcrypt passwords, register rate-limiting, FK cascades, FTS bounds
+- New: full-text search dropdown (categories + videos + open-all), category filter in browse toolbar
+- Perf: count cache, connection-pool tuning, graceful shutdown
+- 16 Go tests added
+
 ## [0.3.17] — 2026-06-11
 
 ### Changed
