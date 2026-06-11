@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.10] — 2026-06-11
+
+### Changed
+- Moved search into mobile sidebar; cleaned up mobile header
+
 ## [0.3.9] — 2026-06-11
 
 ### Changed

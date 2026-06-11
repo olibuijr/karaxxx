@@ -46,7 +46,7 @@ export default function Header({ videoCount, progress, onMenuToggle }: Props) {
             </svg>
           </button>
         )}
-        <BrandLogo size="nav" className="hidden lg:inline-flex ml-3 md:ml-6" />
+        <div className="hidden lg:block ml-3 md:ml-6"><BrandLogo size="nav" /></div>
 
         <form onSubmit={submit} className="hidden lg:block flex-1 min-w-0 max-w-xl relative">
           <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted/60 pointer-events-none"
