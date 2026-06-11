@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.14] — 2026-06-11
+
+### Changed
+- Mobile logo moved to header; sort+source as side-by-side dropdowns; fixed continue watching X button persistence
+
 ## [0.3.13] — 2026-06-11
 
 ### Changed

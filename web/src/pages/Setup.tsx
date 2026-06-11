@@ -1,11 +1,13 @@
-import { useState, type FormEvent } from 'react'
+import { lazy, Suspense, useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { useAuth } from '../lib/auth'
 import { prefetchBrowse } from '../api'
 import BrandLogo from '../components/BrandLogo'
-import LiquidGlassBackground from '../components/LiquidGlassBackground'
+
+// Lazy: three.js lives in its own chunk — authenticated users never download it.
+const LiquidGlassBackground = lazy(() => import('../components/LiquidGlassBackground'))
 
 const sourceUrl = 'https://github.com/olibuijr/karaxxx'
 
@@ -44,7 +46,9 @@ export default function Setup() {
 
   return (
     <main className="relative isolate min-h-dvh overflow-hidden bg-bg text-text flex items-center justify-center px-4 py-8">
-      <LiquidGlassBackground />
+      <Suspense fallback={null}>
+        <LiquidGlassBackground />
+      </Suspense>
 
       <div className="relative z-10 w-full max-w-[960px] grid gap-8 md:grid-cols-[1fr_400px] md:items-center md:gap-12">
 
