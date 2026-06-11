@@ -43,7 +43,9 @@ func httpGetTfWithRetry(urlStr string) (*http.Response, error) {
 	for attempt := 0; attempt < maxHTTPRetries; attempt++ {
 		if attempt > 0 {
 			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
-			if delay > retryMaxDelay { delay = retryMaxDelay }
+			if delay > retryMaxDelay {
+				delay = retryMaxDelay
+			}
 			time.Sleep(delay + time.Duration(rand.Intn(1000))*time.Millisecond)
 		}
 		req, _ := http.NewRequest("GET", urlStr, nil)
@@ -52,10 +54,15 @@ func httpGetTfWithRetry(urlStr string) (*http.Response, error) {
 		req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 		resp, err := httpClient.Do(req)
-		if err != nil { lastErr = err; continue }
+		if err != nil {
+			lastErr = err
+			continue
+		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			resp.Body.Close()
-			if attempt == maxHTTPRetries-1 { return nil, fmt.Errorf("HTTP %d", resp.StatusCode) }
+			if attempt == maxHTTPRetries-1 {
+				return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
 			continue
 		}
 		return resp, nil
@@ -78,14 +85,20 @@ func scrapeTfListing(pageURL string) []Video {
 
 	blocks := reTfVideoThumb.FindAllStringSubmatch(bodyStr, -1)
 	for _, m := range blocks {
-		if len(m) < 3 { continue }
+		if len(m) < 3 {
+			continue
+		}
 		pageURL := m[1]
 		inner := m[3]
 
 		idMatch := reTfVideoID.FindStringSubmatch(pageURL)
-		if idMatch == nil { continue }
+		if idMatch == nil {
+			continue
+		}
 		id := idMatch[1]
-		if seen[id] { continue }
+		if seen[id] {
+			continue
+		}
 		seen[id] = true
 
 		v := Video{ID: id, Source: "tnaflix", AddedAt: time.Now().Format("2006-01-02")}
@@ -113,7 +126,9 @@ func scrapeTfVideoDetail(videoID string) (Video, error) {
 
 	url := tfBase + "/video" + videoID
 	resp, err := httpGetTfWithRetry(url)
-	if err != nil { return v, err }
+	if err != nil {
+		return v, err
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
 	resp.Body.Close()
 	bodyStr := string(body)
@@ -124,7 +139,9 @@ func scrapeTfVideoDetail(videoID string) (Video, error) {
 			v.Title = ld.Name
 			v.Description = ld.Description
 			v.UploadDate = strings.Split(ld.UploadDate, "T")[0]
-			if ld.ThumbnailURL != "" { v.ThumbUUID = ld.ThumbnailURL }
+			if ld.ThumbnailURL != "" {
+				v.ThumbUUID = ld.ThumbnailURL
+			}
 			if ld.Duration != "" {
 				durStr := strings.TrimPrefix(ld.Duration, "PT")
 				if idx := strings.Index(durStr, "H"); idx >= 0 {
@@ -157,17 +174,23 @@ func scrapeTfVideoDetail(videoID string) (Video, error) {
 
 	catMatches := reTfCategory.FindAllStringSubmatch(bodyStr, -1)
 	for _, cm := range catMatches {
-		if len(cm) > 2 { v.Categories = append(v.Categories, strings.TrimSpace(cm[2])) }
+		if len(cm) > 2 {
+			v.Categories = append(v.Categories, strings.TrimSpace(cm[2]))
+		}
 	}
 
 	starMatches := reTfStar.FindAllStringSubmatch(bodyStr, -1)
 	for _, sm := range starMatches {
-		if len(sm) > 2 { v.Tags = append(v.Tags, strings.TrimSpace(sm[2])) }
+		if len(sm) > 2 {
+			v.Tags = append(v.Tags, strings.TrimSpace(sm[2]))
+		}
 	}
 
 	siteMatches := reTfSites.FindAllStringSubmatch(bodyStr, -1)
 	for _, sm := range siteMatches {
-		if len(sm) > 1 && sm[1] != "" { v.Uploader = sm[1] }
+		if len(sm) > 1 && sm[1] != "" {
+			v.Uploader = sm[1]
+		}
 	}
 
 	v.AddedAt = time.Now().Format("2006-01-02")
@@ -213,17 +236,23 @@ func runTfCrawl() {
 
 			videos := scrapeTfListing(pageURL)
 			if len(videos) == 0 {
-				if page > 1 { break }
+				if page > 1 {
+					break
+				}
 				continue
 			}
 
 			for _, v := range videos {
-				if v.ID == "" || seen[v.ID] { continue }
+				if v.ID == "" || seen[v.ID] {
+					continue
+				}
 				seen[v.ID] = true
 
 				var exists string
 				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-				if exists != "" { continue }
+				if exists != "" {
+					continue
+				}
 
 				cats := strings.Join(v.Categories, ",")
 				db.Exec(`INSERT OR IGNORE INTO videos (id, slug, title, categories, duration, source, thumb_uuid, added_at) VALUES (?,?,?,?,?,?,?,?)`,

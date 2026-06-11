@@ -22,7 +22,6 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -337,6 +336,7 @@ func initDB() {
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_title ON videos(title COLLATE NOCASE)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_expires ON videos(expires_at)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_source ON videos(source)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_uploader ON videos(uploader)`)
 
 	var colCount int
 	db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('videos') WHERE name='categories'").Scan(&colCount)
@@ -368,30 +368,16 @@ func initDB() {
 		created_at TEXT DEFAULT (datetime('now'))
 	)`)
 
-	initCrawlSeeds()
-
-	db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5(
-		title, description, categories, tags,
-		content='videos', content_rowid='rowid'
+	db.Exec(`CREATE TABLE IF NOT EXISTS video_categories (
+		video_id TEXT NOT NULL,
+		category TEXT NOT NULL,
+		PRIMARY KEY (video_id, category)
 	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_vc_category ON video_categories(category)`)
 
-	db.Exec(`CREATE TRIGGER IF NOT EXISTS videos_ai AFTER INSERT ON videos BEGIN
-		INSERT INTO videos_fts(rowid, title, description, categories, tags)
-		VALUES (new.rowid, new.title, new.description, new.categories, new.tags);
-	END`)
-	db.Exec(`CREATE TRIGGER IF NOT EXISTS videos_ad AFTER DELETE ON videos BEGIN
-		INSERT INTO videos_fts(videos_fts, rowid, title, description, categories, tags)
-		VALUES ('delete', old.rowid, old.title, old.description, old.categories, old.tags);
-	END`)
-	db.Exec(`CREATE TRIGGER IF NOT EXISTS videos_au AFTER UPDATE ON videos BEGIN
-		INSERT INTO videos_fts(videos_fts, rowid, title, description, categories, tags)
-		VALUES ('delete', old.rowid, old.title, old.description, old.categories, old.tags);
-		INSERT INTO videos_fts(rowid, title, description, categories, tags)
-		VALUES (new.rowid, new.title, new.description, new.categories, new.tags);
-	END`)
-
-	db.Exec(`INSERT OR IGNORE INTO videos_fts(rowid, title, description, categories, tags)
-		SELECT rowid, title, description, categories, tags FROM videos`)
+	initCrawlSeeds()
+	ensureVideosFTSWithUploader()
+	backfillVideoCategoriesIfNeeded()
 
 	// Auth tables
 	db.Exec(`CREATE TABLE IF NOT EXISTS users (
@@ -559,6 +545,224 @@ func initDB() {
 		FOREIGN KEY (user_id) REFERENCES users(id),
 		FOREIGN KEY (video_id) REFERENCES videos(id)
 	)`)
+}
+
+func ensureVideosFTSWithUploader() {
+	var uploaderColCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_xinfo('videos_fts') WHERE name = 'uploader'").Scan(&uploaderColCount); err != nil {
+		log.Printf("videos_fts schema check failed: %v", err)
+		return
+	}
+	if uploaderColCount == 0 {
+		if _, err := db.Exec(`DROP TRIGGER IF EXISTS videos_ai`); err != nil {
+			log.Printf("drop videos_ai failed: %v", err)
+		}
+		if _, err := db.Exec(`DROP TRIGGER IF EXISTS videos_ad`); err != nil {
+			log.Printf("drop videos_ad failed: %v", err)
+		}
+		if _, err := db.Exec(`DROP TRIGGER IF EXISTS videos_au`); err != nil {
+			log.Printf("drop videos_au failed: %v", err)
+		}
+		if _, err := db.Exec(`DROP TABLE IF EXISTS videos_fts`); err != nil {
+			log.Printf("drop videos_fts failed: %v", err)
+		}
+	}
+	if err := createVideosFTSTable(); err != nil {
+		log.Printf("create videos_fts failed: %v", err)
+		return
+	}
+	if err := recreateVideosFTSTriggers(); err != nil {
+		log.Printf("create videos_fts triggers failed: %v", err)
+		return
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO videos_fts(rowid, title, description, categories, tags, uploader)
+		SELECT rowid, title, description, categories, tags, uploader FROM videos`); err != nil {
+		log.Printf("videos_fts backfill failed: %v", err)
+	}
+}
+
+func createVideosFTSTable() error {
+	_, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5(
+		title, description, categories, tags, uploader,
+		content='videos', content_rowid='rowid'
+	)`)
+	return err
+}
+
+func recreateVideosFTSTriggers() error {
+	for _, stmt := range []string{
+		`DROP TRIGGER IF EXISTS videos_ai`,
+		`DROP TRIGGER IF EXISTS videos_ad`,
+		`DROP TRIGGER IF EXISTS videos_au`,
+		`CREATE TRIGGER videos_ai AFTER INSERT ON videos BEGIN
+			INSERT INTO videos_fts(rowid, title, description, categories, tags, uploader)
+			VALUES (new.rowid, new.title, new.description, new.categories, new.tags, new.uploader);
+		END`,
+		`CREATE TRIGGER videos_ad AFTER DELETE ON videos BEGIN
+			INSERT INTO videos_fts(videos_fts, rowid, title, description, categories, tags, uploader)
+			VALUES ('delete', old.rowid, old.title, old.description, old.categories, old.tags, old.uploader);
+		END`,
+		`CREATE TRIGGER videos_au AFTER UPDATE ON videos BEGIN
+			INSERT INTO videos_fts(videos_fts, rowid, title, description, categories, tags, uploader)
+			VALUES ('delete', old.rowid, old.title, old.description, old.categories, old.tags, old.uploader);
+			INSERT INTO videos_fts(rowid, title, description, categories, tags, uploader)
+			VALUES (new.rowid, new.title, new.description, new.categories, new.tags, new.uploader);
+		END`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func backfillVideoCategoriesIfNeeded() {
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM video_categories`).Scan(&existing); err != nil {
+		log.Printf("video_categories count failed: %v", err)
+		return
+	}
+	if existing > 0 {
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("video_categories backfill begin failed: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id, categories FROM videos WHERE categories != '' AND categories IS NOT NULL`)
+	if err != nil {
+		log.Printf("video_categories backfill query failed: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	insertStmt, err := tx.Prepare(`INSERT OR IGNORE INTO video_categories(video_id, category) VALUES (?, ?)`)
+	if err != nil {
+		log.Printf("video_categories backfill prepare failed: %v", err)
+		return
+	}
+	defer insertStmt.Close()
+
+	for rows.Next() {
+		var videoID string
+		var categories string
+		if err := rows.Scan(&videoID, &categories); err != nil {
+			log.Printf("video_categories backfill scan failed: %v", err)
+			return
+		}
+		for _, category := range normalizeCategoryList(strings.Split(categories, ",")) {
+			if _, err := insertStmt.Exec(videoID, category); err != nil {
+				log.Printf("video_categories backfill insert failed for %s: %v", videoID, err)
+				return
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("video_categories backfill rows failed: %v", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("video_categories backfill commit failed: %v", err)
+	}
+}
+
+func normalizeCategoryTerm(raw string) string {
+	category := strings.ToLower(strings.TrimSpace(raw))
+	if category == "" || category == "uncategorized" {
+		return ""
+	}
+	return category
+}
+
+func normalizeCategoryList(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		category := normalizeCategoryTerm(value)
+		if category == "" || seen[category] {
+			continue
+		}
+		seen[category] = true
+		normalized = append(normalized, category)
+	}
+	return normalized
+}
+
+func mergeCategoryLists(lists ...[]string) []string {
+	merged := []string{}
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, value := range list {
+			category := normalizeCategoryTerm(value)
+			if category == "" || seen[category] {
+				continue
+			}
+			seen[category] = true
+			merged = append(merged, category)
+		}
+	}
+	return merged
+}
+
+func joinStoredCategories(categories []string) string {
+	normalized := normalizeCategoryList(categories)
+	if len(normalized) == 0 {
+		return "uncategorized"
+	}
+	return strings.Join(normalized, ",")
+}
+
+func replaceVideoCategories(videoID string, categories []string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := replaceVideoCategoriesTx(tx, videoID, categories); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replaceVideoCategoriesTx(tx *sql.Tx, videoID string, categories []string) error {
+	if _, err := tx.Exec(`DELETE FROM video_categories WHERE video_id = ?`, videoID); err != nil {
+		return err
+	}
+	for _, category := range normalizeCategoryList(categories) {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO video_categories(video_id, category) VALUES (?, ?)`, videoID, category); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadVideoCategories(videoID string) []string {
+	rows, err := db.Query(`SELECT category FROM video_categories WHERE video_id = ? ORDER BY category`, videoID)
+	if err != nil {
+		log.Printf("loadVideoCategories(%s) failed: %v", videoID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	categories := []string{}
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			log.Printf("loadVideoCategories(%s) scan failed: %v", videoID, err)
+			return categories
+		}
+		if category = normalizeCategoryTerm(category); category != "" {
+			categories = append(categories, category)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("loadVideoCategories(%s) rows failed: %v", videoID, err)
+	}
+	return categories
 }
 
 func initInviteDB() {
@@ -1575,9 +1779,17 @@ func handleAPIRclassify(w http.ResponseWriter, r *http.Request) {
 			var id, title, desc, catsStr, tagsStr string
 			rows.Scan(&id, &title, &desc, &catsStr, &tagsStr)
 			tags := strings.Split(tagsStr, ",")
-			newCats := strings.Join(extractCategories(title, desc, tags), ",")
+			mergedCats := mergeCategoryLists(strings.Split(catsStr, ","), tags, extractCategories(title, desc, tags))
+			newCats := joinStoredCategories(mergedCats)
 			if newCats != catsStr {
-				db.Exec("UPDATE videos SET categories = ? WHERE id = ?", newCats, id)
+				if _, err := db.Exec("UPDATE videos SET categories = ? WHERE id = ?", newCats, id); err != nil {
+					log.Printf("Reclassify update failed for %s: %v", id, err)
+					continue
+				}
+				if err := replaceVideoCategories(id, mergedCats); err != nil {
+					log.Printf("Reclassify junction sync failed for %s: %v", id, err)
+					continue
+				}
 				updated++
 			}
 		}
@@ -1644,10 +1856,11 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	var rows *sql.Rows
 	var err error
-	if cat != "" {
+	normalizedCat := normalizeCategoryTerm(cat)
+	if normalizedCat != "" {
 		rows, err = db.Query(
-			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE categories LIKE ? ORDER BY "+order+" LIMIT ? OFFSET ?",
-			"%"+cat+"%", perPage, (page-1)*perPage)
+			"SELECT videos.id, videos.slug, videos.title, videos.description, videos.categories, videos.duration, videos.views, videos.thumb_uuid, videos.preview_url, videos.added_at, videos.upload_date, videos.source FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ? ORDER BY "+order+" LIMIT ? OFFSET ?",
+			normalizedCat, perPage, (page-1)*perPage)
 	} else {
 		rows, err = db.Query(
 			"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos ORDER BY "+order+" LIMIT ? OFFSET ?",
@@ -1664,7 +1877,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		v := Video{}
 		var dur, views sql.NullInt64
 		var cats, uploadDate sql.NullString
-		rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate)
+		rows.Scan(&v.ID, &v.Slug, &v.Title, &v.Description, &cats, &dur, &views, &v.ThumbUUID, &v.PreviewURL, &v.AddedAt, &uploadDate, &v.Source)
 		v.Duration = int(dur.Int64)
 		v.Views = int(views.Int64)
 		if cats.Valid && cats.String != "" {
@@ -1677,7 +1890,11 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	count := 0
-	db.QueryRow("SELECT COUNT(*) FROM videos").Scan(&count)
+	if normalizedCat != "" {
+		db.QueryRow("SELECT COUNT(*) FROM videos JOIN video_categories vc ON vc.video_id = videos.id WHERE vc.category = ?", normalizedCat).Scan(&count)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM videos").Scan(&count)
+	}
 
 	totalPages := (count + perPage - 1) / perPage
 
@@ -1750,37 +1967,21 @@ func refreshCatCache() {
 	if time.Since(catCache.last) < 30*time.Second {
 		return
 	}
-	rows, err := db.Query(`SELECT categories FROM videos WHERE categories != '' AND categories IS NOT NULL AND categories != 'uncategorized' AND ` + playableMediaSQL)
+	rows, err := db.Query(`SELECT vc.category FROM video_categories vc JOIN videos v ON v.id = vc.video_id WHERE ` + playableMediaSQLV + ` GROUP BY vc.category ORDER BY COUNT(*) DESC`)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	freq := map[string]int{}
-	for rows.Next() {
-		var cats string
-		rows.Scan(&cats)
-		for _, c := range strings.Split(cats, ",") {
-			c = strings.TrimSpace(c)
-			if c != "" && c != "uncategorized" {
-				freq[c]++
-			}
-		}
-	}
-	type catCount struct {
-		Name  string
-		Count int
-	}
-	var sorted []catCount
-	for name, count := range freq {
-		sorted = append(sorted, catCount{name, count})
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Count > sorted[j].Count })
 	catCache.cats = nil
-	for i, cc := range sorted {
-		if i >= 30 {
-			break
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			continue
 		}
-		catCache.cats = append(catCache.cats, cc.Name)
+		category = normalizeCategoryTerm(category)
+		if category != "" {
+			catCache.cats = append(catCache.cats, category)
+		}
 	}
 	catCache.last = time.Now()
 }
@@ -1833,9 +2034,9 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	whereClauses := []string{playableMediaSQLV}
 	var args []interface{}
-	if cat != "" {
-		whereClauses = append(whereClauses, "v.categories LIKE ?")
-		args = append(args, "%"+cat+"%")
+	if normalizedCat := normalizeCategoryTerm(cat); normalizedCat != "" {
+		whereClauses = append(whereClauses, "v.id IN (SELECT video_id FROM video_categories WHERE category = ?)")
+		args = append(args, normalizedCat)
 	}
 	if uploader != "" {
 		whereClauses = append(whereClauses, "v.uploader = ?")
@@ -2370,16 +2571,20 @@ func renderPlayPage(w http.ResponseWriter, r *http.Request, v Video) {
 
 func fetchRelated(v Video) []Video {
 	related := []Video{}
-	if len(v.Categories) > 0 && v.Categories[0] != "uncategorized" {
-		catPatterns := []string{}
-		catArgs := []interface{}{}
-		for _, cat := range v.Categories {
-			catPatterns = append(catPatterns, "categories LIKE ?")
-			catArgs = append(catArgs, "%"+cat+"%")
+	categories := normalizeCategoryList(v.Categories)
+	if len(categories) == 0 {
+		categories = loadVideoCategories(v.ID)
+	}
+	if len(categories) > 0 {
+		placeholders := make([]string, 0, len(categories))
+		catArgs := make([]interface{}, 0, len(categories)+2)
+		for _, category := range categories {
+			placeholders = append(placeholders, "?")
+			catArgs = append(catArgs, category)
 		}
-		catArgs = append(catArgs, v.ID)
+		catArgs = append(catArgs, v.ID, 12)
 		rrows, err := db.Query(
-			"SELECT id, title, duration, views, thumb_uuid FROM videos WHERE ("+strings.Join(catPatterns, " OR ")+") AND id != ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT 12",
+			"SELECT DISTINCT v.id, v.title, v.duration, v.views, v.thumb_uuid FROM videos v JOIN video_categories vc ON vc.video_id = v.id WHERE vc.category IN ("+strings.Join(placeholders, ",")+") AND v.id != ? AND "+playableMediaSQLV+" ORDER BY v.views DESC LIMIT ?",
 			catArgs...)
 		if err == nil {
 			for rrows.Next() {
@@ -3467,11 +3672,18 @@ func storeVideo(v Video) {
 	if v.ID == "" || v.Title == "" {
 		return
 	}
-	cats := strings.Join(extractCategories(v.Title, v.Description, v.Tags), ",")
+	mergedCats := mergeCategoryLists(v.Categories, v.Tags, extractCategories(v.Title, v.Description, v.Tags))
+	cats := joinStoredCategories(mergedCats)
 	tagsStr := strings.Join(v.Tags, ",")
 	// On re-scrape keep the original added_at — refreshes must not push old
 	// videos back to the top of the Recent feed.
-	_, err := db.Exec(`INSERT INTO videos (id, slug, title, description, categories, tags, uploader, upload_date, duration, views, added_at, source, thumb_uuid, url_360, url_720, url_1080, preview_url, hls_url, secure_token, expires_at)
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("storeVideo(%s) begin failed: %v", v.ID, err)
+		return
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`INSERT INTO videos (id, slug, title, description, categories, tags, uploader, upload_date, duration, views, added_at, source, thumb_uuid, url_360, url_720, url_1080, preview_url, hls_url, secure_token, expires_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			slug=excluded.slug, title=excluded.title, description=excluded.description,
@@ -3487,6 +3699,14 @@ func storeVideo(v Video) {
 		v.SecureToken, v.ExpiresAt)
 	if err != nil {
 		log.Printf("storeVideo(%s) failed: %v", v.ID, err)
+		return
+	}
+	if err := replaceVideoCategoriesTx(tx, v.ID, mergedCats); err != nil {
+		log.Printf("storeVideo(%s) category sync failed: %v", v.ID, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("storeVideo(%s) commit failed: %v", v.ID, err)
 	}
 }
 
@@ -3663,18 +3883,27 @@ func scrapeXhVideoDetail(shortID string) (Video, error) {
 
 	// Tags and uploader from window.initials
 	tagSet := map[string]bool{}
-	// Extract all tag names
-	tagMatches := regexp.MustCompile(`"name"\s*:\s*"([^"]+)"`).FindAllStringSubmatch(initJSON, -1)
-	for _, tm := range tagMatches {
-		if len(tm) > 1 {
-			name := tm[1]
-			if name != "" && name != v.Title {
-				tagSet[name] = true
-			}
+	catSet := map[string]bool{}
+	for _, tm := range reXhTags.FindAllStringSubmatch(initJSON, -1) {
+		if len(tm) < 4 {
+			continue
 		}
-	}
-	for name := range tagSet {
-		v.Tags = append(v.Tags, name)
+		appendUnique := func(dst *[]string, seen map[string]bool, raw string) {
+			name := strings.TrimSpace(raw)
+			if name == "" || strings.EqualFold(name, v.Title) || seen[name] {
+				return
+			}
+			seen[name] = true
+			*dst = append(*dst, name)
+		}
+		switch {
+		case tm[1] != "":
+			appendUnique(&v.Tags, tagSet, tm[1])
+		case tm[2] != "":
+			appendUnique(&v.Categories, catSet, tm[2])
+		case tm[3] != "":
+			appendUnique(&v.Tags, tagSet, tm[3])
+		}
 	}
 
 	// Uploader: look for isPornstar or isCreator names
@@ -4421,7 +4650,7 @@ var tagToCat = map[string]string{
 	"step-mom": "step-family", "stepmom": "step-family", "step-mother": "step-family",
 	"step-daughter": "step-family", "stepdaughter": "step-family", "step-son": "step-family",
 	"step-brother": "step-family", "stepbrother": "step-family", "step-dad": "step-family",
-	"porn": "pornstar",
+	"porn":    "pornstar",
 	"cuckold": "cuckold", "cuck": "cuckold", "cuckquean": "cuckold",
 	"feet": "feet", "foot": "feet", "footjob": "feet", "toes": "feet",
 	"stockings": "stockings", "pantyhose": "stockings", "nylons": "stockings",
@@ -4461,41 +4690,41 @@ var tagToCat = map[string]string{
 	"milk": "lactation", "hucow": "lactation",
 	"sleeping": "sleeping", "hypnosis": "sleeping", "hypno": "sleeping",
 	"neighbor": "reality", "neighbour": "reality",
-	"verified": "homemade",
+	"verified":    "homemade",
 	"big nipples": "fetish", "nipple": "fetish", "nipples": "fetish",
 	"puffy nipples": "fetish",
-	"prostate": "solo", "male solo": "solo", "jack off": "solo", "jerking": "solo",
+	"prostate":      "solo", "male solo": "solo", "jack off": "solo", "jerking": "solo",
 	"dogging": "outdoor", "exhibition": "outdoor", "exhibitionist": "outdoor",
 	"goth": "alternative", "alt": "alternative", "emo": "alternative", "punk": "alternative",
 	"piercing": "pierced",
-	"bald": "shaved", "hairless": "shaved",
+	"bald":     "shaved", "hairless": "shaved",
 	"mommy": "milf", "matures": "milf",
-	"fresh": "teen",
+	"fresh":     "teen",
 	"big boobs": "big-tits", "boob": "big-tits",
 	"huge boobs": "big-tits", "massive": "big-tits",
-	"booty": "big-ass",
+	"booty":   "big-ass",
 	"mexican": "latina", "brazilian": "latina",
 	"blow job": "blowjob", "bj": "blowjob",
-	"hand job": "handjob",
+	"hand job":       "handjob",
 	"black on white": "bbc",
-	"filipino": "asian",
-	"vietnamese": "asian",
-	"rough sex": "rough",
-	"home video": "homemade", "selfie": "homemade",
+	"filipino":       "asian",
+	"vietnamese":     "asian",
+	"rough sex":      "rough",
+	"home video":     "homemade", "selfie": "homemade",
 	"old": "milf", "older": "milf",
-	"cg": "cartoon",
+	"cg":         "cartoon",
 	"domination": "bdsm", "submission": "bdsm",
 	"hidden camera": "hidden-cam", "spy cam": "hidden-cam", "spycam": "hidden-cam",
-	"caught": "hidden-cam",
-	"ladyboy": "transgender",
-	"bush": "hairy",
+	"caught":     "hidden-cam",
+	"ladyboy":    "transgender",
+	"bush":       "hairy",
 	"au naturel": "natural-tits",
-	"a cups": "small-tits", "flat chest": "small-tits",
+	"a cups":     "small-tits", "flat chest": "small-tits",
 	"middle eastern": "arab",
-	"solo male": "solo", "solo girl": "solo",
+	"solo male":      "solo", "solo girl": "solo",
 	"watersports": "fetish",
 	"sex machine": "toy",
-	"bathtub": "shower",
+	"bathtub":     "shower",
 }
 
 var categoryKeywords = []struct {

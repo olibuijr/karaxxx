@@ -19,9 +19,9 @@ func handleAPIRandom(w http.ResponseWriter, r *http.Request) {
 		clauses = append(clauses, "source = ?")
 		args = append(args, source)
 	}
-	if cat != "" {
-		clauses = append(clauses, "categories LIKE ?")
-		args = append(args, "%"+cat+"%")
+	if normalizedCat := normalizeCategoryTerm(cat); normalizedCat != "" {
+		clauses = append(clauses, "id IN (SELECT video_id FROM video_categories WHERE category = ?)")
+		args = append(args, normalizedCat)
 	}
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
@@ -50,44 +50,38 @@ func handleAPIRelated(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var cats string
 	var vSource string
-	db.QueryRow("SELECT categories, source FROM videos WHERE id = ?", videoID).Scan(&cats, &vSource)
+	db.QueryRow("SELECT source FROM videos WHERE id = ?", videoID).Scan(&vSource)
 
 	related := []Video{}
-	if cats != "" {
-		catList := strings.Split(cats, ",")
-		var catClauses []string
-		var catArgs []interface{}
-		for _, c := range catList {
-			c = strings.TrimSpace(c)
-			if c != "" && c != "uncategorized" {
-				catClauses = append(catClauses, "categories LIKE ?")
-				catArgs = append(catArgs, "%"+c+"%")
-			}
+	categories := loadVideoCategories(videoID)
+	if len(categories) > 0 {
+		placeholders := make([]string, 0, len(categories))
+		catArgs := make([]interface{}, 0, len(categories)+2)
+		for _, category := range categories {
+			placeholders = append(placeholders, "?")
+			catArgs = append(catArgs, category)
 		}
-		if len(catClauses) > 0 {
-			catArgs = append(catArgs, videoID, limit)
-			rows, err := db.Query(
-				"SELECT id, slug, title, description, categories, duration, views, thumb_uuid, preview_url, added_at, upload_date, source FROM videos WHERE ("+strings.Join(catClauses, " OR ")+") AND id != ? AND "+playableMediaSQL+" ORDER BY views DESC LIMIT ?",
-				catArgs...)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					vv := Video{}
-					var dur, views sql.NullInt64
-					var rc, rDate sql.NullString
-					rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &rc, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &rDate, &vv.Source)
-					vv.Duration = int(dur.Int64)
-					vv.Views = int(views.Int64)
-					if rc.Valid && rc.String != "" {
-						vv.Categories = strings.Split(rc.String, ",")
-					}
-					if rDate.Valid {
-						vv.UploadDate = rDate.String
-					}
-					related = append(related, vv)
+		catArgs = append(catArgs, videoID, limit)
+		rows, err := db.Query(
+			"SELECT DISTINCT v.id, v.slug, v.title, v.description, v.categories, v.duration, v.views, v.thumb_uuid, v.preview_url, v.added_at, v.upload_date, v.source FROM videos v JOIN video_categories vc ON vc.video_id = v.id WHERE vc.category IN ("+strings.Join(placeholders, ",")+") AND v.id != ? AND "+playableMediaSQLV+" ORDER BY v.views DESC LIMIT ?",
+			catArgs...)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				vv := Video{}
+				var dur, views sql.NullInt64
+				var rc, rDate sql.NullString
+				rows.Scan(&vv.ID, &vv.Slug, &vv.Title, &vv.Description, &rc, &dur, &views, &vv.ThumbUUID, &vv.PreviewURL, &vv.AddedAt, &rDate, &vv.Source)
+				vv.Duration = int(dur.Int64)
+				vv.Views = int(views.Int64)
+				if rc.Valid && rc.String != "" {
+					vv.Categories = strings.Split(rc.String, ",")
 				}
+				if rDate.Valid {
+					vv.UploadDate = rDate.String
+				}
+				related = append(related, vv)
 			}
 		}
 	}
