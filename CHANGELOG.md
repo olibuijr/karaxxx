@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.17] — 2026-06-11
+
+### Changed
+- Category system overhaul: fixed the 'only two categories filter' bug — all scraped categories now preserved, tags unified as categories, exact-match junction-table filtering, full metadata indexing
+- P0 security/correctness fixes from 10-agent audit
+
 ## [0.3.16] — 2026-06-11
 
 ### Changed
