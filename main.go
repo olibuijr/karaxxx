@@ -2615,9 +2615,20 @@ func handleAPIBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	whereClauses := []string{playableMediaSQLV}
 	var args []interface{}
-	if normalizedCat := normalizeCategoryTerm(cat); normalizedCat != "" {
+	// Categories support comma-separated AND/intersection: a video must match
+	// every requested category (e.g. cat=anal,milf → tagged both).
+	catList := parseCategoryFilter(cat)
+	if len(catList) == 1 {
 		whereClauses = append(whereClauses, "v.id IN (SELECT video_id FROM video_categories WHERE category = ?)")
-		args = append(args, normalizedCat)
+		args = append(args, catList[0])
+	} else if len(catList) >= 2 {
+		ph := make([]string, len(catList))
+		for i, c := range catList {
+			ph[i] = "?"
+			args = append(args, c)
+		}
+		whereClauses = append(whereClauses, "v.id IN (SELECT video_id FROM video_categories WHERE category IN ("+strings.Join(ph, ",")+") GROUP BY video_id HAVING COUNT(DISTINCT category) = ?)")
+		args = append(args, len(catList))
 	}
 	if uploader != "" {
 		whereClauses = append(whereClauses, "v.uploader = ?")
