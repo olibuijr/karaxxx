@@ -2836,7 +2836,7 @@ func handleVidProxy(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	quality := "360"
+	quality := ""
 	if len(parts) > 1 {
 		quality = strings.TrimSuffix(parts[1], "/")
 	}
@@ -2855,11 +2855,9 @@ func handleVidProxy(w http.ResponseWriter, r *http.Request) {
 		targetURL = v.URL720
 	case "1080":
 		targetURL = v.URL1080
-	default:
-		targetURL = v.URL360
 	}
 	if targetURL == "" {
-		for _, u := range []string{v.URL360, v.URL720, v.URL1080} {
+		for _, u := range []string{v.URL1080, v.URL720, v.URL360} {
 			if u != "" {
 				targetURL = u
 				break
