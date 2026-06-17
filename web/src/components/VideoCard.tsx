@@ -5,16 +5,17 @@ import { formatDuration, formatViews, timeAgo } from '../api'
 import FavoriteButton from './FavoriteButton'
 import { toggleCategoryParam } from '../lib/categories'
 
+const SOURCE_BADGE: Record<string, { label: string; color: string }> = {
+  xhamster: { label: 'XH', color: 'bg-orange text-black' },
+  eporner:  { label: 'EP', color: 'bg-blue-500 text-white' },
+  tnaflix:  { label: 'TF', color: 'bg-emerald-500 text-white' },
+  drtuber:  { label: 'DT', color: 'bg-violet-500 text-white' },
+}
+
 export default function VideoCard({ video }: { video: Video }) {
   const navigate = useNavigate()
   const location = useLocation()
   const isNotXnxx = video.source && video.source !== 'xnxx'
-  const sourceBadge: Record<string, { label: string; color: string }> = {
-    xhamster: { label: 'XH', color: 'bg-orange text-black' },
-    eporner:  { label: 'EP', color: 'bg-blue-500 text-white' },
-    tnaflix:  { label: 'TF', color: 'bg-emerald-500 text-white' },
-    drtuber:  { label: 'DT', color: 'bg-violet-500 text-white' },
-  }
   const thumb = video.thumb_uuid
     ? (isNotXnxx ? `/media?url=${encodeURIComponent(video.thumb_uuid)}` : `/thumb/${video.thumb_uuid}/0/xn_23_t.jpg`)
     : ''
@@ -23,7 +24,7 @@ export default function VideoCard({ video }: { video: Video }) {
     : isNotXnxx && video.thumb_uuid ? `/media?url=${encodeURIComponent(video.thumb_uuid)}` : ''
   const vidRef = useRef<HTMLVideoElement>(null)
 
-  const watchedPos = (video as any).watched_position as number | undefined
+  const watchedPos = video.watched_position
   const progressPct = watchedPos && video.duration > 0
     ? Math.min(100, (watchedPos / video.duration) * 100)
     : 0
@@ -105,10 +106,10 @@ export default function VideoCard({ video }: { video: Video }) {
             {formatDuration(video.duration)}
           </span>
         )}
-        {isNotXnxx && sourceBadge[video.source] && (
+        {isNotXnxx && SOURCE_BADGE[video.source] && (
           <span className={`absolute top-2 left-2 text-[9px] px-1.5 py-0.5 rounded-full
-                            font-bold uppercase tracking-wider z-10 ${sourceBadge[video.source].color}`}>
-            {sourceBadge[video.source].label}
+                            font-bold uppercase tracking-wider z-10 ${SOURCE_BADGE[video.source].color}`}>
+            {SOURCE_BADGE[video.source].label}
           </span>
         )}
         <FavoriteButton videoId={video.id} />

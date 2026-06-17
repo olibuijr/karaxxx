@@ -29,7 +29,10 @@ export default function Wall() {
   const [commentError, setCommentError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!token || !username) return
+    if (!token || !username) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     fetchWall(username, token)
       .then(setData)
@@ -52,6 +55,7 @@ export default function Wall() {
     }
   }
 
+  if (!token) return <div className="text-center py-24 text-muted">Sign in to view walls.</div>
   if (loading) return <div className="text-center py-24 text-muted">Loading...</div>
   if (!data) return <div className="text-center py-24 text-muted">Wall not found.</div>
 
@@ -110,7 +114,7 @@ export default function Wall() {
             placeholder="Leave a wall comment..."
             className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm text-text outline-none focus:border-orange/50"
           />
-          <button type="submit" disabled={!comment.trim() || busy} className="rounded-md bg-orange px-3 py-2 text-sm font-bold text-black disabled:opacity-45">
+          <button type="submit" disabled={!comment.trim() || busy} className="rounded-md bg-orange px-3 py-2 text-sm font-bold text-black disabled:opacity-50">
             Post
           </button>
         </form>

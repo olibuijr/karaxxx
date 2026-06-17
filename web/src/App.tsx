@@ -14,6 +14,7 @@ import Wall from './pages/Wall'
 import Changelog from './pages/Changelog'
 import { useEffect, useState } from 'react'
 import { subscribeProgress } from './api'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 function AppLayout() {
   const { user, loading } = useAuth()
@@ -53,15 +54,15 @@ function AppLayout() {
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <div className="flex-1 min-w-0">
           <Routes>
-            <Route path="/" element={<Browse />} />
-            <Route path="/search" element={<Browse />} />
-            <Route path="/play/:id" element={<Play />} />
-            <Route path="/favorites" element={<Favorites />} />
-            <Route path="/playlists" element={<Playlists />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route path="/wall/:username" element={<Wall />} />
-            <Route path="/status" element={<Status />} />
-            <Route path="/changelog" element={<Changelog />} />
+            <Route path="/" element={<ErrorBoundary><Browse /></ErrorBoundary>} />
+            <Route path="/search" element={<ErrorBoundary><Browse /></ErrorBoundary>} />
+            <Route path="/play/:id" element={<ErrorBoundary><Play /></ErrorBoundary>} />
+            <Route path="/favorites" element={<ErrorBoundary><Favorites /></ErrorBoundary>} />
+            <Route path="/playlists" element={<ErrorBoundary><Playlists /></ErrorBoundary>} />
+            <Route path="/profile" element={<ErrorBoundary><Profile /></ErrorBoundary>} />
+            <Route path="/wall/:username" element={<ErrorBoundary><Wall /></ErrorBoundary>} />
+            <Route path="/status" element={<ErrorBoundary><Status /></ErrorBoundary>} />
+            <Route path="/changelog" element={<ErrorBoundary><Changelog /></ErrorBoundary>} />
           </Routes>
         </div>
       </div>

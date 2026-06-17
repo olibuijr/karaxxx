@@ -99,7 +99,7 @@ export default function VideoSocialPanel({ videoId, token, initialWatchCount = 0
         <button
           type="submit"
           disabled={!comment.trim() || busy}
-          className="rounded-md bg-orange px-3 py-2 text-sm font-bold text-black disabled:opacity-45"
+          className="rounded-md bg-orange px-3 py-2 text-sm font-bold text-black disabled:opacity-50"
         >
           Post
         </button>

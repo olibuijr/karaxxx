@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import VideoCard from '../components/VideoCard'
 import VideoCardSkeleton from '../components/VideoCardSkeleton'
 import FilterSelect from '../components/FilterSelect'
-import { clearWatchHistory, fetchBrowse, fetchCategories, subscribeProgress } from '../api'
+import { clearWatchHistory, fetchBrowse, fetchCategories, subscribeProgress, removeWatchHistory } from '../api'
 import {
   Dialog,
   DialogClose,
@@ -18,6 +18,7 @@ import { parseCategories, toggleCategoryParam } from '../lib/categories'
 import type { Video, CrawlProgress } from '../types'
 import { SOURCES } from '../types'
 import { useAuth } from '../lib/auth'
+import { XIcon } from 'lucide-react'
 
 type BrowseSort = 'recent' | 'new' | 'views' | 'duration'
 type Density = 'compact' | 'comfortable' | 'large' | 'theatre'
@@ -176,10 +177,7 @@ export default function Browse() {
 
   const removeFromHistory = useCallback(async (videoId: string) => {
     if (!token) return
-    await fetch(`/api/watch/${videoId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    await removeWatchHistory(token, videoId)
     setHistory(prev => prev.filter(h => h.id !== videoId))
   }, [token])
 
@@ -544,7 +542,7 @@ export default function Browse() {
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFromHistory(h.id) }}
                   className="absolute top-0.5 right-0.5 z-20 flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full bg-black/60 text-white text-xs transition-colors hover:bg-red/80 lg:top-1 lg:right-1 lg:min-h-0 lg:min-w-0 lg:h-5 lg:w-5"
                 >
-                  X
+                  <XIcon className="w-3.5 h-3.5" />
                 </button>
                 <VideoCard video={h} />
               </div>

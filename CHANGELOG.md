@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.22] — 2026-06-17
+
+### Changed
+- Always pick best available quality in video proxy: fallback order changed from 360→720→1080 to 1080→720→360, so videos without lower-quality variants stream at their best available resolution instead of worst quality.
+- Frontend: fix removeFromHistory using wrong API endpoint (/api/watch vs /api/watch/history)
+- Frontend: fix Playlists context menu closing only on last playlist row
+- Frontend: fix Wall page infinite loading when logged out
+- Frontend: add ErrorBoundary to all routes preventing blank-screen crashes
+- Frontend: fix fetchRandom/fetchPlaylists/fetchProfile missing error guards
+- Frontend: remove unused Pagination component and useKeyboardShortcuts hook
+- Frontend: watched_position properly typed (no more as-any casts)
+- Frontend: sourceBadge moved to module scope (perf: no per-render alloc)
+
 ## [0.3.20] — 2026-06-11
 
 ### Changed

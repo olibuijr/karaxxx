@@ -26,7 +26,7 @@ export default function Playlists() {
   const [renaming, setRenaming] = useState<number | null>(null)
   const [renameVal, setRenameVal] = useState('')
   const [menuOpen, setMenuOpen] = useState<number | null>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<Map<number, HTMLDivElement>>(new Map())
 
   const fetchPlaylists = () => {
     if (!token) {
@@ -57,7 +57,9 @@ export default function Playlists() {
 
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(null)
+      let inside = false
+      menuRef.current.forEach(el => { if (el.contains(e.target as Node)) inside = true })
+      if (!inside) setMenuOpen(null)
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
@@ -271,7 +273,7 @@ export default function Playlists() {
                     {pl.video_count} videos · Created {formatDate(pl.created_at)}
                   </div>
                 </div>
-                <div className="relative" onClick={e => e.stopPropagation()} ref={menuRef}>
+                <div className="relative" onClick={e => e.stopPropagation()} ref={el => { if (el) menuRef.current.set(pl.id, el); else menuRef.current.delete(pl.id) }}>
                   <button
                     onClick={() => setMenuOpen(menuOpen === pl.id ? null : pl.id)}
                     className="p-1 text-muted hover:text-text transition-colors rounded hover:bg-white/5"

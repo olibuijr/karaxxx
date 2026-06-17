@@ -136,7 +136,9 @@ export async function fetchRandom(source?: string, cat?: string): Promise<string
   if (cat) sp.set('cat', cat)
   const qs = sp.toString()
   const res = await fetch(`${BASE}/random${qs ? '?' + qs : ''}`)
-  const data = await res.json()
+  if (!res.ok) throw new Error(`Random failed: ${res.status}`)
+  const data = await res.json() as { id: string }
+  if (!data.id) throw new Error('Random: missing id in response')
   return data.id
 }
 
@@ -148,6 +150,7 @@ export async function fetchTags(limit: number = 50): Promise<{name: string, coun
 
 export async function fetchPlaylists(token: string): Promise<any[]> {
   const res = await fetch(`${BASE}/playlists`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Playlists failed: ${res.status}`)
   return res.json()
 }
 
@@ -163,6 +166,7 @@ export async function addToPlaylist(token: string, playlistId: number, videoId: 
 
 export async function fetchProfile(token: string): Promise<any> {
   const res = await fetch(`${BASE}/profile`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Profile failed: ${res.status}`)
   return res.json()
 }
 

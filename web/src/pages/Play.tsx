@@ -54,7 +54,7 @@ export default function Play() {
   useEffect(() => {
     const vid = videoRef.current
     if (!vid || !v) return
-    const watched = (v as any).watched_position as number | undefined
+    const watched = v.watched_position
     if (!watched || watched <= 0) return
     const onMeta = () => { vid.currentTime = watched }
     vid.addEventListener('loadedmetadata', onMeta, { once: true })
@@ -63,7 +63,7 @@ export default function Play() {
 
   useEffect(() => {
     if (!v) return
-    const watched = (v as any).watched_position as number | undefined
+    const watched = v.watched_position
     if (!watched || watched <= 5) return
     const mins = Math.floor(watched / 60)
     const secs = Math.floor(watched % 60)
@@ -125,7 +125,7 @@ export default function Play() {
       vid.removeEventListener('pause', onPause)
       vid.removeEventListener('seeking', onSeeking)
     }
-  }, [id, token, quality])
+  }, [id, token])
 
   useEffect(() => {
     if (!id || !token) return
@@ -172,7 +172,8 @@ export default function Play() {
   const handleEnded = useCallback(async () => {
     if (autoplayDisabled || !id) return
     const related = await fetchRelated(id)
-    const nextId = related.length > 0 ? related[0].id : await fetchRandom()
+    const nextId = related.length > 0 ? related[0].id : await fetchRandom(v?.source, v?.categories?.[0]).catch(() => null)
+    if (!nextId) return
     setNextVideo(nextId)
     setCountdown(5)
   }, [autoplayDisabled, id])

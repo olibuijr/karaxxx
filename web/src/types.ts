@@ -18,6 +18,7 @@ export interface Video {
   preview_url: string
   hls_url: string
   watch_count?: number
+  watched_position?: number
 }
 
 export interface BrowseParams {
