@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.10] — 2026-06-19
+
+### Changed
+- Fix xVideos thumbnail proxy allowlist (xvideos-cdn.com) so cards no longer 403.
+- Fix XNXX HTTP thumbnail URLs in search suggestions/sidebar by proxying concrete CDN URLs and using mozaique_listing for UUID rows.
+
 ## [0.6.9] — 2026-06-19
 
 ### Changed

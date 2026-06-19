@@ -3305,6 +3305,7 @@ func loadOrRefreshVideo(id string) (Video, bool) {
 
 var allowedCDNHostSuffixes = []string{
 	"xnxx-cdn.com",
+	"xvideos-cdn.com",
 	"xhcdn.com",
 	"eporner.com",
 	"tnaflix.com",

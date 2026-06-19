@@ -218,6 +218,8 @@ func TestValidUsernameRejectsSpecialChars(t *testing.T) {
 
 func TestIsAllowedCDNHostAllowsKnownDomains(t *testing.T) {
 	cases := []string{
+		"thumb-cdn77.xnxx-cdn.com",
+		"thumb-cdn77.xvideos-cdn.com",
 		"v123.xhcdn.com",
 		"heavyfetish.com",
 		"www.punishbang.com",

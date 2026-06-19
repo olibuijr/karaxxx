@@ -24,6 +24,14 @@ function readStoredPreference(key: string): string | null {
   }
 }
 
+function getVideoThumb(video: Video): string {
+  const thumb = video.thumb_uuid
+  if (!thumb) return ''
+  if (video.source && video.source !== 'xnxx') return `/media?url=${encodeURIComponent(thumb)}`
+  if (/^https?:\/\//i.test(thumb)) return `/media?url=${encodeURIComponent(thumb)}`
+  return `/thumb/${thumb}/0/mozaique_listing.jpg`
+}
+
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [cats, setCats] = useState<string[]>([])
   const [pinnedCats, setPinnedCats] = useState<string[]>([])
@@ -286,7 +294,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                           <div className="w-10 h-7 rounded bg-bg flex-shrink-0 overflow-hidden">
                             {v.thumb_uuid && (
                               <img
-                                src={v.source && v.source !== 'xnxx' ? `/media?url=${encodeURIComponent(v.thumb_uuid)}` : `/thumb/${v.thumb_uuid}/0/xn_23_t.jpg`}
+                                src={getVideoThumb(v)}
                                 alt={v.title}
                                 className="w-full h-full object-cover"
                                 loading="lazy"

@@ -19,10 +19,11 @@ type SearchAction =
 const EMPTY_RESULTS: SearchSuggestResponse = { categories: [], videos: [] }
 
 function getVideoThumb(video: Video): string {
-  const isNotXnxx = video.source && video.source !== 'xnxx'
-  return video.thumb_uuid
-    ? (isNotXnxx ? `/media?url=${encodeURIComponent(video.thumb_uuid)}` : `/thumb/${video.thumb_uuid}/0/xn_23_t.jpg`)
-    : ''
+  const thumb = video.thumb_uuid
+  if (!thumb) return ''
+  if (video.source && video.source !== 'xnxx') return `/media?url=${encodeURIComponent(thumb)}`
+  if (/^https?:\/\//i.test(thumb)) return `/media?url=${encodeURIComponent(thumb)}`
+  return `/thumb/${thumb}/0/mozaique_listing.jpg`
 }
 
 function formatSourceLabel(source: string): string {
