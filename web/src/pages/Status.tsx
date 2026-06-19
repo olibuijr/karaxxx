@@ -28,10 +28,14 @@ export default function Status() {
       if (p.source_counts) {
         setSourceStats([
           { name: 'xnxx', label: 'XNXX', color: '#e50914', count: p.source_counts.xnxx || 0 },
+          { name: 'xvideos', label: 'xVideos', color: '#22c55e', count: p.source_counts.xvideos || 0 },
           { name: 'xhamster', label: 'xHamster', color: '#f97316', count: p.source_counts.xhamster || 0 },
           { name: 'eporner', label: 'EPorner', color: '#3b82f6', count: p.source_counts.eporner || 0 },
           { name: 'tnaflix', label: 'TNAFlix', color: '#10b981', count: p.source_counts.tnaflix || 0 },
           { name: 'drtuber', label: 'DrTuber', color: '#8b5cf6', count: p.source_counts.drtuber || 0 },
+          { name: 'heavyfetish', label: 'HeavyFetish', color: '#c026d3', count: p.source_counts.heavyfetish || 0 },
+          { name: 'punishbang', label: 'PunishBang', color: '#991b1b', count: p.source_counts.punishbang || 0 },
+          { name: 'sunporno', label: 'SunPorno', color: '#f59e0b', count: p.source_counts.sunporno || 0 },
         ])
       }
     })
@@ -40,17 +44,19 @@ export default function Status() {
 
   function triggerCrawl(source: string) {
     setLogs(l => [...l.slice(-4), `Starting ${source} crawl...`])
-    fetch(`/api/crawl${source === 'xnxx' ? '' : source === 'xhamster' ? '-xh' : source === 'tnaflix' ? '-tf' : source === 'drtuber' ? '-dt' : '-ep'}`)
+    fetch(`/api/crawl${source === 'xnxx' ? '' : source === 'xvideos' ? '-xv' : source === 'xhamster' ? '-xh' : source === 'tnaflix' ? '-tf' : source === 'drtuber' ? '-dt' : ['heavyfetish', 'punishbang', 'sunporno'].includes(source) ? '-kvs' : '-ep'}`)
       .catch(() => setLogs(l => [...l.slice(-4), `${source} crawl trigger failed`]))
   }
 
   function triggerAll() {
     setLogs(l => [...l.slice(-4), 'Starting ALL crawls in parallel...'])
     fetch('/api/crawl').catch(() => {})
+    fetch('/api/crawl-xv').catch(() => {})
     fetch('/api/crawl-xh').catch(() => {})
     fetch('/api/crawl-ep').catch(() => {})
     fetch('/api/crawl-tf').catch(() => {})
     fetch('/api/crawl-dt').catch(() => {})
+    fetch('/api/crawl-kvs').catch(() => {})
   }
 
   const isActive = !!(progress?.status && progress.status !== 'idle' && (progress.status !== 'scraping' || progress.detail_total > 0))
@@ -113,7 +119,7 @@ export default function Status() {
           <CardTitle className="text-base">Sources</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-4">
             {sourceStats.map(s => (
               <div key={s.name} className="text-center">
                 <div className="text-2xl font-bold" style={{ color: s.color }}>{s.label}</div>
@@ -146,6 +152,14 @@ export default function Status() {
                          text-text hover:bg-card-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               XNXX
+            </button>
+            <button
+              onClick={() => triggerCrawl('xvideos')}
+              disabled={isActive}
+              className="px-4 py-2 rounded-full text-sm font-semibold border border-border
+                         text-text hover:bg-card-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              xVideos
             </button>
             <button
               onClick={() => triggerCrawl('xhamster')}

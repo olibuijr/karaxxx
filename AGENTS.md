@@ -2,7 +2,7 @@
 
 ## Overview
 
-Go + SQLite + React/Tailwind v4 + shadcn/ui web app that crawls 5 adult video sources,
+Go + SQLite + React/Tailwind v4 + shadcn/ui web app that crawls 6 adult video sources,
 stores metadata/URLs, and serves a clean playback UI with user accounts and favorites.
 Zero ads, zero JS tracking, direct MP4 streams.
 
@@ -24,30 +24,35 @@ karaXXX (Go binary, multi-file package main)
       └── background detail-scrape for unscraped/expired videos
 ```
 
-## Providers (5 sources, threaded crawling)
+## Providers (6 sources, threaded crawling)
 
 | # | Provider | Source Key | ID Format | Metadata |
 |---|----------|-----------|-----------|----------|
 | 1 | **XNXX** | `xnxx` | hash (e.g. `abc123d`) | JSON-LD + player JS |
-| 2 | **xHamster** | `xhamster` | short hash (7-8 chars) | `window.initials` JSON |
-| 3 | **EPorner** | `eporner` | hash (~10 chars) | Structured HTML + meta desc |
-| 4 | **TNAFlix** | `tnaflix` | numeric (e.g. `3086656`) | JSON-LD VideoObject |
-| 5 | **DrTuber** | `drtuber` | numeric (e.g. `8620574`) | `applicationData` + og meta |
+| 2 | **xVideos** | `xvideos` | alphanumeric (e.g. `iopkmuaedc3`) | JSON-LD + `setVideoUrl*` JS |
+| 3 | **xHamster** | `xhamster` | short hash (7-8 chars) | `window.initials` JSON |
+| 4 | **EPorner** | `eporner` | hash (~10 chars) | Structured HTML + meta desc |
+| 5 | **TNAFlix** | `tnaflix` | numeric (e.g. `3086656`) | JSON-LD VideoObject |
+| 6 | **DrTuber** | `drtuber` | numeric (e.g. `8620574`) | `applicationData` + og meta |
 
-**Crawl All** (`/api/crawl`) fires all 5 providers as parallel goroutines.
+**Playable sources** (server-side URL extraction): xnxx, xvideos, xhamster
+**Metadata-only** (JS-delivered video, no server-side MP4/HLS): eporner, drtuber, tnaflix
+
+**Crawl All** (`/api/crawl`) fires all 6 providers as parallel goroutines.
 Each provider has its own rate limiter (per-domain, ~400ms between requests to same host),
-so crawling 5 providers simultaneously yields ~5x throughput without hitting rate limits.
+so crawling 6 providers simultaneously yields ~6x throughput without hitting rate limits.
 
 ## Per-Provider Rate Limiters
 
 Each provider has a dedicated `chan time.Time` rate limiter:
 - `rateLimiter` — XNXX (global, also used by background detail scraper)
+- `rateLimitXv` — xVideos
 - `rateLimitXh` — xHamster
 - `rateLimitEp` — EPorner
 - `rateLimitTf` — TNAFlix
 - `rateLimitDt` — DrTuber
 
-All 5 can run simultaneously at full speed without blocking each other.
+All 6 can run simultaneously at full speed without blocking each other.
 
 ## Branding
 
@@ -168,7 +173,7 @@ Categories include: anal, teen, milf, blowjob, big-tits, big-ass, homemade, crea
 
 ```bash
 # Build Go binary (requires sqlite_fts5 build tag for FTS search)
-cd ~/Projects/Karaxxx
+cd ~/.hermes/workspaces/karaxxx
 go build -tags "sqlite_fts5" -buildvcs=false -o karaxxx .
 
 # Build React frontend
@@ -214,7 +219,8 @@ systemctl --user enable --now karaxxx-db-sync.timer
 |------|---------|
 | `/api/browse` | Paginated video list (supports `?sort=`, `?cat=`, `?q=`, `?uploader=`, `?source=`) |
 | `/api/video/{id}` | Single video detail with MP4/HLS URLs |
-| `/api/crawl` | Trigger ALL crawlers (xnxx + xhamster + eporner + tnaflix + drtuber) in parallel |
+| `/api/crawl` | Trigger ALL crawlers (xnxx + xvideos + xhamster + eporner + tnaflix + drtuber) in parallel |
+| `/api/crawl-xv` | Trigger xVideos crawl |
 | `/api/crawl-xh` | Trigger xHamster crawl |
 | `/api/crawl-ep` | Trigger EPorner crawl |
 | `/api/crawl-tf` | Trigger TNAFlix crawl |
@@ -249,6 +255,7 @@ systemctl --user enable --now karaxxx-db-sync.timer
   "total_count": 38200,
   "source_counts": {
     "xnxx": 37337,
+    "xvideos": 296,
     "eporner": 240,
     "tnaflix": 235,
     "drtuber": 201,
@@ -266,7 +273,7 @@ systemctl --user enable --now karaxxx-db-sync.timer
 - **Infinite scroll**: IntersectionObserver with 600px root margin for preloading
 - **Quality**: 360p/720p/1080p from direct MP4 CDN URLs
 - **Sorting**: Recent (added_at), New (upload_date), Popular (views), Longest (duration)
-- **Source filter**: All / XNXX / xHamster / EPorner / TNAFlix / DrTuber
+- **Source filter**: All / XNXX / xVideos / xHamster / EPorner / TNAFlix / DrTuber
 - **Categories**: Sidebar with pin-to-top favorites for logged-in users
 - **Auth**: Login/Register dialog (shadcn Dialog), user dropdown with avatar
 - **Favorites**: Heart button on every card and play page, `/favorites` page
@@ -287,7 +294,7 @@ systemctl --user enable --now karaxxx-db-sync.timer
 
 ### Rate Limiting
 - `rateLimitInterval = 400ms` between HTTP requests
-- **Per-provider rate limiters** — 5 independent channels so all crawlers run simultaneously
+- **Per-provider rate limiters** — 6 independent channels so all crawlers run simultaneously
 - 3 retries with exponential backoff (5s → 10s → 20s)
 - Max 5 concurrent scrape workers per provider (`scrapeWorkers = 5`)
 - Per-provider lock files prevent duplicate crawls (`/tmp/karaxxx-{source}-crawl.lock`)

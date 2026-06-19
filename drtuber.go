@@ -157,6 +157,19 @@ func scrapeDtVideoDetail(videoID string) (Video, error) {
 	}
 
 	v.AddedAt = time.Now().Format("2006-01-02")
+
+	// Best-effort video URL extraction from page
+	if m := regexp.MustCompile(`(?i)src\s*=\s*["']([^"']*\.mp4[^"']*)["']`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`(?i)(https?://[^"'\s<>]*?\.mp4[^"'\s<>]*)`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"contentUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	// For DrTuber the video player is JS-heavy so URL extraction from raw HTML
+	// is not reliable. Fallback is silent — video stays as metadata-only.
 	return v, nil
 }
 
@@ -200,6 +213,7 @@ func runDtCrawl() {
 					pageURL = fmt.Sprintf("%s/%d", seed, page)
 				}
 			}
+			log.Printf("DrTuber: scanning %s", pageURL)
 
 			videos := scrapeDtListing(pageURL)
 			if len(videos) == 0 {

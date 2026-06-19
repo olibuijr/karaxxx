@@ -217,10 +217,16 @@ func TestValidUsernameRejectsSpecialChars(t *testing.T) {
 // ---- isAllowedCDNHost ----
 
 func TestIsAllowedCDNHostAllowsKnownDomains(t *testing.T) {
-	// These should pass (they're in allowedCDNHostSuffixes)
-	// Test a subdomain of a known CDN suffix
-	if !isAllowedCDNHost("v123.xhcdn.com") {
-		t.Error("expected v123.xhcdn.com to be allowed")
+	cases := []string{
+		"v123.xhcdn.com",
+		"heavyfetish.com",
+		"www.punishbang.com",
+		"acdn.sunporno.com",
+	}
+	for _, c := range cases {
+		if !isAllowedCDNHost(c) {
+			t.Errorf("expected %q to be allowed", c)
+		}
 	}
 }
 

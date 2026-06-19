@@ -194,6 +194,18 @@ func scrapeTfVideoDetail(videoID string) (Video, error) {
 	}
 
 	v.AddedAt = time.Now().Format("2006-01-02")
+
+	// Best-effort video URL extraction from page
+	if m := regexp.MustCompile(`(?i)src\s*=\s*["']([^"']*\.mp4[^"']*)["']`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`(?i)(https?://[^"'\s<>]*?\.mp4[^"'\s<>]*)`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"contentUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+
 	return v, nil
 }
 
@@ -233,6 +245,7 @@ func runTfCrawl() {
 			if page > 1 {
 				pageURL = fmt.Sprintf("%s/%d", strings.TrimRight(seed, "/"), page)
 			}
+			log.Printf("TNAFlix: scanning %s", pageURL)
 
 			videos := scrapeTfListing(pageURL)
 			if len(videos) == 0 {

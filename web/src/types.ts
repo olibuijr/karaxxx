@@ -93,9 +93,13 @@ export interface ChangelogInfo {
 
 export const SOURCES: { label: string; value: string }[] = [
   { label: 'All', value: '' },
+  { label: 'xVideos', value: 'xvideos' },
   { label: 'XNXX', value: 'xnxx' },
   { label: 'xHamster', value: 'xhamster' },
   { label: 'EPorner', value: 'eporner' },
   { label: 'TNAFlix', value: 'tnaflix' },
   { label: 'DrTuber', value: 'drtuber' },
+  { label: 'HeavyFetish', value: 'heavyfetish' },
+  { label: 'PunishBang', value: 'punishbang' },
+  { label: 'SunPorno BDSM', value: 'sunporno' },
 ]

@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.6.9] — 2026-06-19
+
+### Changed
+- Fix KVS playback media proxy allow-list for HeavyFetish, PunishBang, and SunPorno assets.
+- Stop stale metadata-only failures from persisting in retry queue and clear them on successful skip.
+- Prune permanent xnxx.gold teaser failures immediately and clean old stale failure rows on startup.
+- Trim KVS 404 log noise so pagination misses do not dump HTML into journald.
+
+## [0.6.8] — 2026-06-19
+
+### Changed
+- Clean up stale KVS crawl lock on restart so BDSM source crawls cannot get wedged after deploy restarts.
+
+## [0.6.7] — 2026-06-19
+
+### Changed
+- Remove dead PunishBang BDSM category seed that returned 404; keep working videos and bondage seeds.
+
+## [0.6.6] — 2026-06-19
+
+### Changed
+- Add KVS-style BDSM playable sources: HeavyFetish, PunishBang, and SunPorno BDSM.
+- Wire new sources into automated crawl loop, backfill refresh, status UI, source filters, and badges.
+- Add /api/crawl-kvs endpoint and live-smoke verified MP4 extraction from all three sources.
+
+## [0.6.5] — 2026-06-19
+
+### Changed
+- Use highest available video quality consistently and resolve quality buttons to real streams.
+- Serve higher-resolution/correct thumbnail assets for XNXX/xVideos instead of hard-coded low/wrong frames.
+- Fix mobile density controls: all four sizes now produce distinct grids, with Compact starting at 2 columns.
+
+## [0.6.4] — 2026-06-19
+
+### Fixed
+- **CrawlProgress lock-copy bug**: `getProgressJSON()` was copying `CrawlProgress` struct (which contains `sync.RWMutex`) — undefined behavior under concurrent access. Fixed by using a mutex-free `progressSnapshot` struct for JSON encoding. (go vet clean)
+- **storeVideo overwriting fields with empty values**: `ON CONFLICT DO UPDATE` was blindly overwriting slug, thumb_uuid, url_360/720/1080, preview_url, hls_url, secure_token, and expires_at with whatever the detail scraper returned — even if empty. This cleared slugs and URLs on re-scrape. Fixed with `CASE WHEN excluded.X != '' THEN excluded.X ELSE videos.X END` for all nullable fields.
+- **xhamster detail scraper losing slug**: `scrapeXhVideoDetail()` didn't look up the slug from DB, so `storeVideo()` overwrote the stub's slug with empty string. Fixed by querying the slug from DB (same pattern as xVideos scraper).
+- **Stale crawl lock files after restart**: `/tmp/karaxxx-*-crawl.lock` files survived ungraceful exits (kill, crash, deploy), causing crawls to be silently skipped on the next process. Added `cleanupStaleLocks()` at startup that removes all 6 lock files.
+- **Frontend sendBeacon Content-Type**: `navigator.sendBeacon()` with a plain string sends `text/plain` — the server's JSON handler couldn't parse it. Watch position was lost on page unload. Fixed by wrapping in `Blob` with `type: 'application/json'`.
+- **Frontend missing xVideos in Status dashboard**: Source stats grid, crawl trigger buttons, and `triggerAll()` were missing xVideos. Added xVideos to all three.
+- **Frontend missing xVideos in SearchDropdown**: `formatSourceLabel()` didn't handle 'xvideos'. Added.
+- **Dead code removed**: `reXhVideoList` regex was defined but never used (superseded by inline regex in `scrapeXhListing`).
+
+### Changed
+- xHamster crawl completion log now includes diagnostic counters (listing found, filtered empty ID/Slug, filtered existing) for monitoring.
+
+## [0.6.3] — 2026-06-19
+
+### Changed
+- Release deployed through deploy.sh.
+
+## [0.6.2] — 2026-06-19
+
+### Changed
+- Release deployed through deploy.sh.
+
+## [0.6.1] — 2026-06-19
+
+### Changed
+- Release deployed through deploy.sh.
+
+## [0.6.0] — 2026-06-19
+
+### Changed
+- Release deployed through deploy.sh.
+
+## [0.5.0] — 2026-06-19
+
+### Production-Grade UI Overhaul
+
+- **Design System**: OLED cinema theme with true black (`#000000`), deep midnight cards (`#0d0d1a`), rose red accent (`#e11d48`), ambient crimson glow background
+- **Custom Video Player**: HTML5 controls replaced with custom overlay — progress bar with glow thumb, play/pause/volume/fullscreen, quality selector, theater mode with auto-hide
+- **Keyboard Shortcuts**: Full HUD — Space (play/pause), arrows (seek/volume), F (fullscreen), T (theater), M (mute), J/L (seek -10s/+10s), ? (shortcuts)
+- **VideoCard**: Play button overlay on hover, scale-in animation, gradient source badges, polished category pills
+- **Browse**: Refined filter chips with X icon, proper empty/error state components with SVG illustrations, animated loading spinner
+- **Login/Setup**: Password show/hide toggle, spinner loading states, glass-morphism auth card with specular edge, value prop section
+- **CSS**: Custom scrollbars, selection colors, `prefers-reduced-motion` support, view transitions animation, toast overrides
+- **Typography**: Inter body + Barlow Condensed display, font-feature-settings for OpenType
+
+## [0.4.2] — 2026-06-19
+
+### Changed
+- **Parallel crawl loop**: all 5 providers now launch concurrently via WaitGroup instead of running sequentially
+- **Per-page progress logging** added to XNXX, EPorner, TNAFlix, and DrTuber crawls (was silent before)
+
+## [0.4.1] — 2026-06-19
+
+### Added
+- **Automated crawl service** (`crawlLoop` goroutine): runs all 5 providers sequentially every 6 hours
+  - Initial 60s sleep on startup, then cycles xnxx → xhamster → eporner → tnaflix → drtuber
+  - Respects existing per-provider crawl locks, no overlap
+- **Traffic camo & browser simulation** (safe scraping)
+  - Expanded user agent pool to 10 modern browsers (Chrome 124-127, Firefox 127 across Win/Mac/Linux)
+  - Random user agent rotation per request
+  - Best-effort `<source>`, `contentUrl`, `embedUrl` extraction in all detail scrapers
+- **Smart source filtering**: `isPlayableSource()` prevents infinite retry loops for non-playable sources (eporner, drtuber, tnaflix). Their metadata stays in DB but no URL extraction is retried.
+- **xHamster crawl seeds expanded**: 7 seeds (up from 4), 10 pages per seed (up from 5)
+
+### Changed
+- `ensureFreshVideo()` skips non-playable sources for token refresh
+- `scrapeNewVideoDetails()` clears failures and skips non-playable sources
+- User agents updated to latest major browser versions
+
+## [0.4.0] — 2026-06-19
+
+### Changed
+- Release deployed through deploy.sh.
+
+## [0.3.23] — 2026-06-17
+
+### Changed
+- Release deployed through deploy.sh.
+
 ## [0.3.22] — 2026-06-17
 
 ### Changed

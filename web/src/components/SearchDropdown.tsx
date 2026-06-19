@@ -27,6 +27,7 @@ function getVideoThumb(video: Video): string {
 
 function formatSourceLabel(source: string): string {
   if (source === 'xnxx') return 'XNXX'
+  if (source === 'xvideos') return 'xVideos'
   if (source === 'xhamster') return 'xHamster'
   if (source === 'eporner') return 'EPorner'
   if (source === 'tnaflix') return 'TNAFlix'

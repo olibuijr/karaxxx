@@ -47,16 +47,20 @@ var (
 	bgWg          sync.WaitGroup
 	progress      CrawlProgress
 	crawlMu       sync.Mutex
+	crawlMuXv     sync.Mutex
 	crawlMuXh     sync.Mutex
 	crawlMuEp     sync.Mutex
 	crawlMuTf     sync.Mutex
 	crawlMuDt     sync.Mutex
+	crawlMuKVS    sync.Mutex
 	catCache      catCacheT
 	rateLimiter   chan time.Time
+	rateLimitXv   chan time.Time
 	rateLimitXh   chan time.Time
 	rateLimitEp   chan time.Time
 	rateLimitTf   chan time.Time
 	rateLimitDt   chan time.Time
+	rateLimitKVS  chan time.Time
 	refreshLocks  sync.Map
 	routeAPI      func(w http.ResponseWriter, r *http.Request)
 	startTime     = time.Now()
@@ -72,13 +76,16 @@ var (
 )
 
 var userAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
-	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:127.0) Gecko/20100101 Firefox/127.0",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
 }
 
 type catCacheT struct {
@@ -121,6 +128,7 @@ const (
 	backfillBatchSize             = 12
 	backfillEvery                 = 30 * time.Minute
 	retryFailedEvery              = 15 * time.Minute
+	crawlEvery                    = 6 * time.Hour
 	dbMaxOpenConns                = 8
 	dbBusyTimeout                 = 5 * time.Second
 	crawlLockPath                 = "/tmp/karaxxx-crawl.lock"
@@ -136,6 +144,7 @@ const (
 	maxProxyBytes                 = 2 << 30
 	playableMediaSQL              = "(COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '')"
 	playableMediaSQLV             = "(COALESCE(v.url_360,'') <> '' OR COALESCE(v.url_720,'') <> '' OR COALESCE(v.url_1080,'') <> '' OR COALESCE(v.hls_url,'') <> '')"
+	playableSources               = "xnxx,xhamster,xvideos,heavyfetish,punishbang,sunporno" // sources that provide playable media URLs via server-side scraping
 )
 
 var jwtSecret string
@@ -286,6 +295,26 @@ func loadOrCreateJWTSecret() {
 
 // --- Init ---
 
+// cleanupStaleLocks removes leftover crawl lock files from a previous process.
+// On ungraceful exit (kill, crash, deploy restart), /tmp/karaxxx-*-crawl.lock
+// files remain and cause the next process to skip crawls indefinitely.
+func cleanupStaleLocks() {
+	patterns := []string{
+		"/tmp/karaxxx-crawl.lock",
+		"/tmp/karaxxx-xh-crawl.lock",
+		"/tmp/karaxxx-xv-crawl.lock",
+		"/tmp/karaxxx-ep-crawl.lock",
+		"/tmp/karaxxx-tf-crawl.lock",
+		"/tmp/karaxxx-dt-crawl.lock",
+		"/tmp/karaxxx-kvs-crawl.lock",
+	}
+	for _, p := range patterns {
+		if err := os.Remove(p); err == nil {
+			log.Printf("Removed stale lock file: %s", p)
+		}
+	}
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "invite" {
 		initInviteDB()
@@ -298,14 +327,18 @@ func main() {
 
 	loadOrCreateJWTSecret()
 
+	cleanupStaleLocks()
+
 	initHTTPClient()
 	initDB()
+	cleanupStaleScrapeFailures()
 	initTemplates()
 	initRoutes()
 
 	go refreshLoop(ctx)
 	go backgroundBackfillLoop(ctx)
 	go retryFailedLoop(ctx)
+	go crawlLoop(ctx)
 	go func() {
 		// Prime xnxx session cookies for scraping and CDN proxy
 		time.Sleep(2 * time.Second)
@@ -411,10 +444,12 @@ func initHTTPClient() {
 		}
 	}()
 	// Per-provider rate limiters for parallel crawling
+	rateLimitXv = newRateLimiter(rateLimitInterval)
 	rateLimitXh = newRateLimiter(rateLimitInterval)
 	rateLimitEp = newRateLimiter(2 * time.Second) // EPorner is aggressive with 429s
 	rateLimitTf = newRateLimiter(rateLimitInterval)
 	rateLimitDt = newRateLimiter(rateLimitInterval)
+	rateLimitKVS = newRateLimiter(rateLimitInterval)
 }
 
 func initDB() {
@@ -1324,6 +1359,45 @@ func configureSQLitePool(conn *sql.DB, maxOpen int) {
 	}
 }
 
+func cleanupStaleScrapeFailures() {
+	if db == nil {
+		return
+	}
+	if res, err := db.Exec(`DELETE FROM scrape_failures
+		WHERE video_id IN (SELECT id FROM videos WHERE source IN ('eporner','drtuber','tnaflix'))`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("Cleared %d stale metadata-only scrape failures", n)
+		}
+	} else {
+		log.Printf("metadata-only scrape failure cleanup failed: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT f.video_id
+		FROM scrape_failures f
+		JOIN videos v ON v.id = f.video_id
+		WHERE lower(f.last_error) LIKE '%redirected off-site to www.xnxx.gold%'
+		AND COALESCE(v.url_360,'') = ''
+		AND COALESCE(v.url_720,'') = ''
+		AND COALESCE(v.url_1080,'') = ''
+		AND COALESCE(v.hls_url,'') = ''`)
+	if err != nil {
+		log.Printf("permanent scrape failure cleanup query failed: %v", err)
+		return
+	}
+	defer rows.Close()
+	deleted := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			deleteVideoEverywhere(id, "permanent xnxx.gold redirect")
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		log.Printf("Deleted %d unplayable xnxx.gold teaser rows", deleted)
+	}
+}
+
 func runDBMaintenance() {
 	for range time.NewTicker(6 * time.Hour).C {
 		log.Println("Running DB maintenance...")
@@ -2063,6 +2137,8 @@ func initRoutes() {
 				handleSearchSuggest(w, r)
 			case r.URL.Path == "/api/crawl":
 				handleAPICrawl(w, r)
+			case r.URL.Path == "/api/crawl-xv":
+				handleAPICrawlXv(w, r)
 			case r.URL.Path == "/api/crawl-xh":
 				handleAPICrawlXh(w, r)
 			case r.URL.Path == "/api/crawl-ep":
@@ -2071,6 +2147,8 @@ func initRoutes() {
 				handleAPICrawlTf(w, r)
 			case r.URL.Path == "/api/crawl-dt":
 				handleAPICrawlDt(w, r)
+			case r.URL.Path == "/api/crawl-kvs":
+				handleAPICrawlKVS(w, r)
 			case r.URL.Path == "/api/categories":
 				handleAPICategories(w, r)
 			case r.URL.Path == "/api/browse":
@@ -2153,10 +2231,12 @@ func initRoutes() {
 	http.HandleFunc("/api/search", handleAPISearch)
 	http.HandleFunc("/api/search-suggest", handleSearchSuggest)
 	http.HandleFunc("/api/crawl", handleAPICrawl)
+	http.HandleFunc("/api/crawl-xv", handleAPICrawlXv)
 	http.HandleFunc("/api/crawl-xh", handleAPICrawlXh)
 	http.HandleFunc("/api/crawl-ep", handleAPICrawlEp)
 	http.HandleFunc("/api/crawl-tf", handleAPICrawlTf)
 	http.HandleFunc("/api/crawl-dt", handleAPICrawlDt)
+	http.HandleFunc("/api/crawl-kvs", handleAPICrawlKVS)
 	http.HandleFunc("/api/categories", handleAPICategories)
 	http.HandleFunc("/api/browse", handleAPIBrowse)
 	http.HandleFunc("/api/video/", handleAPIVideo)
@@ -2273,6 +2353,50 @@ func refreshExpiring() {
 	log.Println("Refresh cycle complete")
 }
 
+func isPlayableSource(source string) bool {
+	switch source {
+	case "", "xnxx", "xhamster", "xvideos":
+		return true
+	default:
+		return isKVSSource(source)
+	}
+}
+
+func crawlLoop(ctx context.Context) {
+	ticker := time.NewTicker(crawlEvery)
+	defer ticker.Stop()
+
+	// Initial sleep to let the app start up before crawling
+	select {
+	case <-time.After(60 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	for {
+		log.Println("=== Starting automated crawl cycle (parallel) ===")
+
+		var wg sync.WaitGroup
+		wg.Add(7)
+		go func() { defer wg.Done(); runFullCrawl() }()
+		go func() { defer wg.Done(); runXvCrawl() }()
+		go func() { defer wg.Done(); runXhCrawl() }()
+		go func() { defer wg.Done(); runEpCrawl() }()
+		go func() { defer wg.Done(); runTfCrawl() }()
+		go func() { defer wg.Done(); runDtCrawl() }()
+		go func() { defer wg.Done(); runKVSCrawl() }()
+		wg.Wait()
+
+		log.Println("=== Automated crawl cycle complete ===")
+
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // --- Progress / SSE ---
 
 func setProgress(source, status string, scanned, newVideos, cached, detailDone, detailTotal, page int) {
@@ -2293,9 +2417,33 @@ func setProgress(source, status string, scanned, newVideos, cached, detailDone, 
 	progress.mu.Unlock()
 }
 
+// progressSnapshot is a mutex-free copy of CrawlProgress fields for JSON encoding.
+// Copying CrawlProgress directly copies the sync.RWMutex, which go vet flags and is undefined behavior.
+type progressSnapshot struct {
+	Status       string         `json:"status"`
+	Source       string         `json:"source"`
+	Scanned      int            `json:"scanned"`
+	NewVideos    int            `json:"new_videos"`
+	Cached       int            `json:"cached"`
+	DetailDone   int            `json:"detail_done"`
+	DetailTotal  int            `json:"detail_total"`
+	Page         int            `json:"page"`
+	TotalCount   int            `json:"total_count"`
+	SourceCounts map[string]int `json:"source_counts"`
+}
+
 func getProgressJSON() []byte {
 	progress.mu.RLock()
-	p := progress
+	p := progressSnapshot{
+		Status:      progress.Status,
+		Source:      progress.Source,
+		Scanned:     progress.Scanned,
+		NewVideos:   progress.NewVideos,
+		Cached:      progress.Cached,
+		DetailDone:  progress.DetailDone,
+		DetailTotal: progress.DetailTotal,
+		Page:        progress.Page,
+	}
 	progress.mu.RUnlock()
 	if p.Status == "" || (p.Status == "scraping" && p.DetailTotal <= 0) {
 		p.Status = "idle"
@@ -2872,6 +3020,22 @@ func handleVidProxy(w http.ResponseWriter, r *http.Request) {
 	proxyCDN(w, r, targetURL)
 }
 
+func previewURLFromThumbnail(rawURL string) string {
+	if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	idx := strings.LastIndex(u.Path, "/")
+	if idx < 0 {
+		return ""
+	}
+	u.Path = u.Path[:idx+1] + "preview.mp4"
+	return u.String()
+}
+
 func handleThumbProxy(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/thumb/")
 	if path == "" {
@@ -2992,6 +3156,8 @@ func refreshLock(videoID string) func() {
 
 func scrapeVideoDetailForSource(id, source string) (Video, error) {
 	switch source {
+	case "xvideos":
+		return scrapeXvVideoDetail(id)
 	case "xhamster":
 		return scrapeXhVideoDetail(id)
 	case "eporner":
@@ -3001,6 +3167,9 @@ func scrapeVideoDetailForSource(id, source string) (Video, error) {
 	case "drtuber":
 		return scrapeDtVideoDetail(id)
 	default:
+		if isKVSSource(source) {
+			return scrapeKVSVideoDetail(id, source)
+		}
 		return scrapeVideoDetail(id)
 	}
 }
@@ -3034,6 +3203,11 @@ func loadVideoFromDB(id string) (Video, bool) {
 }
 
 func ensureFreshVideo(v Video, lead time.Duration) (Video, error) {
+	if !isPlayableSource(v.Source) {
+		// Non-playable sources (eporner, drtuber, tnaflix) can't have their
+		// media URLs refreshed server-side. Return as-is.
+		return v, nil
+	}
 	normalizeVideoExpiry(&v)
 	if hasPlayableMedia(v) && !videoNeedsTokenRefresh(v, lead) {
 		return v, nil
@@ -3136,6 +3310,9 @@ var allowedCDNHostSuffixes = []string{
 	"tnaflix.com",
 	"drtuber.com",
 	"drtst.com",
+	"heavyfetish.com",
+	"punishbang.com",
+	"sunporno.com",
 }
 
 func isAllowedCDNHost(host string) bool {
@@ -3422,10 +3599,12 @@ func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 func handleAPICrawl(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	go runFullCrawl()
+	go runXvCrawl()
 	go runXhCrawl()
 	go runEpCrawl()
 	go runTfCrawl()
 	go runDtCrawl()
+	go runKVSCrawl()
 	http.Redirect(w, r, "/", 302)
 }
 
@@ -3455,6 +3634,7 @@ func runFullCrawl() {
 		if page > 0 {
 			pageURL = fmt.Sprintf("%s/%d", searchURL, page)
 		}
+		log.Printf("XNXX: scanning %s", pageURL)
 
 		resp, err := httpGetWithRetry(pageURL)
 		if err != nil {
@@ -4314,9 +4494,15 @@ func scrapeVideoDetail(id string) (Video, error) {
 			v.Duration = parseDuration(ld.Duration)
 
 			if len(ld.ThumbnailURL) > 0 {
-				if m2 := reThumbUUID.FindStringSubmatch(ld.ThumbnailURL[0]); len(m2) > 1 {
-					v.ThumbUUID = m2[1]
-					v.PreviewURL = fmt.Sprintf("%s/%s/0/preview.mp4", thumbCDN, v.ThumbUUID)
+				// Store the concrete CDN thumbnail URL when available so the UI can
+				// render the source-selected poster at native quality instead of
+				// inventing a hard-coded xn_N_t frame number. Existing rows that only
+				// have a UUID remain supported by the frontend.
+				v.ThumbUUID = strings.ReplaceAll(ld.ThumbnailURL[0], "\\/", "/")
+				if preview := previewURLFromThumbnail(v.ThumbUUID); preview != "" {
+					v.PreviewURL = preview
+				} else if m2 := reThumbUUID.FindStringSubmatch(v.ThumbUUID); len(m2) > 1 {
+					v.PreviewURL = fmt.Sprintf("%s/%s/0/preview.mp4", thumbCDN, m2[1])
 				}
 			}
 
@@ -4447,13 +4633,18 @@ func storeVideo(v Video) {
 	_, err = tx.Exec(`INSERT INTO videos (id, slug, title, description, categories, tags, uploader, upload_date, duration, views, added_at, source, thumb_uuid, url_360, url_720, url_1080, preview_url, hls_url, secure_token, expires_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
-			slug=excluded.slug, title=excluded.title, description=excluded.description,
+			slug=CASE WHEN excluded.slug != '' THEN excluded.slug ELSE videos.slug END,
+			title=excluded.title, description=excluded.description,
 			categories=excluded.categories, tags=excluded.tags, uploader=excluded.uploader,
 			upload_date=excluded.upload_date, duration=excluded.duration, views=excluded.views,
-			source=excluded.source, thumb_uuid=excluded.thumb_uuid,
-			url_360=excluded.url_360, url_720=excluded.url_720, url_1080=excluded.url_1080,
-			preview_url=excluded.preview_url, hls_url=excluded.hls_url,
-			secure_token=excluded.secure_token, expires_at=excluded.expires_at`,
+			source=excluded.source, thumb_uuid=CASE WHEN excluded.thumb_uuid != '' THEN excluded.thumb_uuid ELSE videos.thumb_uuid END,
+			url_360=CASE WHEN excluded.url_360 != '' THEN excluded.url_360 ELSE videos.url_360 END,
+			url_720=CASE WHEN excluded.url_720 != '' THEN excluded.url_720 ELSE videos.url_720 END,
+			url_1080=CASE WHEN excluded.url_1080 != '' THEN excluded.url_1080 ELSE videos.url_1080 END,
+			preview_url=CASE WHEN excluded.preview_url != '' THEN excluded.preview_url ELSE videos.preview_url END,
+			hls_url=CASE WHEN excluded.hls_url != '' THEN excluded.hls_url ELSE videos.hls_url END,
+			secure_token=CASE WHEN excluded.secure_token != '' THEN excluded.secure_token ELSE videos.secure_token END,
+			expires_at=CASE WHEN excluded.expires_at != 0 THEN excluded.expires_at ELSE videos.expires_at END`,
 		v.ID, v.Slug, v.Title, v.Description, cats, tagsStr, v.Uploader, v.UploadDate,
 		v.Duration, v.Views, v.AddedAt, v.Source,
 		v.ThumbUUID, v.URL360, v.URL720, v.URL1080, v.PreviewURL, v.HLSURL,
@@ -4475,7 +4666,6 @@ func storeVideo(v Video) {
 
 var (
 	reXhInitials    = regexp.MustCompile(`window\.initials\s*=\s*(\{[\s\S]*?\});\s*</script>`)
-	reXhVideoList   = regexp.MustCompile(`"pageURL"\s*:\s*"((?:[^"\\]|\\.)*)"[^}]*"id"\s*:\s*(\d+)`)
 	reXhHLSPreload  = regexp.MustCompile(`https://video\d+\.xhcdn\.com/key=[^"'\s<>]+m3u8`)
 	reXhMP4Link     = regexp.MustCompile(`https://video\d+\.xhcdn\.com/key=[^"'\s<>]*/(\d+)p\.h264\.mp4`)
 	reXhTokenExpiry = regexp.MustCompile(`[,&]end=(\d+)`)
@@ -4589,6 +4779,11 @@ func scrapeXhListing(pageURL string) []Video {
 
 func scrapeXhVideoDetail(shortID string) (Video, error) {
 	v := Video{ID: shortID, Source: "xhamster"}
+
+	// Get slug from DB — needed for correct URL and to preserve it in the record
+	var slug string
+	db.QueryRow("SELECT slug FROM videos WHERE id = ?", shortID).Scan(&slug)
+	v.Slug = slug
 
 	url := xhBase + "/videos/" + shortID
 	resp, err := httpGetXhWithRetry(url)
@@ -4736,6 +4931,21 @@ func scrapeXhVideoDetail(shortID string) (Video, error) {
 	}
 
 	v.AddedAt = time.Now().Format("2006-01-02")
+
+	// Try to extract video source / MP4 URLs from the page
+	if m := regexp.MustCompile(`(?i)src\s*=\s*["']([^"']*\.mp4[^"']*)["']`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`(?i)(https?://[^"'\s<>]*?\.mp4[^"'\s<>]*)`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"contentUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"embedUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		v.HLSURL = m[1]
+	}
+
 	return v, nil
 }
 
@@ -4769,17 +4979,23 @@ func runXhCrawl() {
 
 	log.Println("Starting xHamster crawl...")
 	totalNew := 0
+	totalListingFound := 0
+	totalFilteredEmpty := 0
+	totalFilteredExists := 0
 
 	// Seed URLs to crawl - similar to xnxx seed strategy
 	seeds := []string{
 		xhBase + "/newest",
 		xhBase + "/best/weekly",
 		xhBase + "/best/monthly",
-		xhBase + "/channels",
+		xhBase + "/best/daily",
+		xhBase + "/best",
+		xhBase + "/top/this-month",
+		xhBase + "/top/this-week",
 	}
 
 	for _, seed := range seeds {
-		for page := 0; page < 5; page++ {
+		for page := 0; page < 10; page++ {
 			pageURL := seed
 			if page > 0 {
 				pageURL = fmt.Sprintf("%s?page=%d", seed, page)
@@ -4793,15 +5009,18 @@ func runXhCrawl() {
 				}
 				continue
 			}
+			totalListingFound += len(videos)
 
 			for _, v := range videos {
 				if v.ID == "" || v.Slug == "" {
+					totalFilteredEmpty++
 					continue
 				}
 
 				var exists string
 				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
 				if exists != "" {
+					totalFilteredExists++
 					continue
 				}
 
@@ -4825,7 +5044,8 @@ func runXhCrawl() {
 		}
 	}
 
-	log.Printf("xHamster crawl complete: %d new videos scraped", totalNew)
+	log.Printf("xHamster crawl complete: %d new videos scraped (listing found: %d, filtered empty ID/Slug: %d, filtered existing: %d)",
+		totalNew, totalListingFound, totalFilteredEmpty, totalFilteredExists)
 }
 
 // --- EPorner Scraper ---
@@ -5027,6 +5247,21 @@ func scrapeEpVideoDetail(hash string) (Video, error) {
 	}
 
 	v.AddedAt = time.Now().Format("2006-01-02")
+
+	// Best-effort video URL extraction from page
+	if m := regexp.MustCompile(`(?i)src\s*=\s*["']([^"']*\.mp4[^"']*)["']`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`(?i)(https?://[^"'\s<>]*?\.mp4[^"'\s<>]*)`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"contentUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		assignMP4Quality(&v, m[1])
+	}
+	if m := regexp.MustCompile(`"embedUrl"\s*:\s*"([^"]*)"`).FindStringSubmatch(bodyStr); len(m) > 1 {
+		v.HLSURL = m[1]
+	}
+
 	return v, nil
 }
 
@@ -5055,11 +5290,13 @@ func runEpCrawl() {
 			}
 			if page > 0 {
 				if cat != "" {
-					pageURL = fmt.Sprintf("%s/%d/", epBase+"/"+cat, page)
+					pageURL = fmt.Sprintf("%s/%d/", epBase+"/"+cat, page+1)
 				} else {
-					pageURL = fmt.Sprintf("%s/%d/", epBase, page)
+					pageURL = fmt.Sprintf("%s/%d/", epBase, page+1)
 				}
 			}
+
+			log.Printf("EPorner: scanning %s", pageURL)
 
 			videos := scrapeEpListing(pageURL)
 			if len(videos) == 0 {
@@ -5131,6 +5368,12 @@ func scrapeNewVideoDetails() {
 	for rows.Next() {
 		var id, source string
 		rows.Scan(&id, &source)
+		if !isPlayableSource(source) {
+			// Non-playable sources (eporner, drtuber, tnaflix) don't provide
+			// server-side media URLs. Skip retries to avoid infinite failure loop.
+			clearScrapeFailure(id)
+			continue
+		}
 		pendingList = append(pendingList, pending{id, source})
 	}
 	rows.Close()
@@ -5233,6 +5476,12 @@ func httpGetWithRetry(urlStr string) (*http.Response, error) {
 }
 
 func recordScrapeFailure(videoID string, scrapeErr error) {
+	if isPermanentScrapeFailure(scrapeErr) {
+		pruneFailedVideoIfUnplayable(videoID, scrapeErr.Error())
+		if _, ok := loadVideoFromDB(videoID); !ok {
+			return
+		}
+	}
 	var retryCount int
 	db.QueryRow("SELECT retry_count FROM scrape_failures WHERE video_id = ?", videoID).Scan(&retryCount)
 	nextCount := retryCount + 1
@@ -5254,6 +5503,14 @@ func recordScrapeFailure(videoID string, scrapeErr error) {
 
 func clearScrapeFailure(videoID string) {
 	db.Exec("DELETE FROM scrape_failures WHERE video_id = ?", videoID)
+}
+
+func isPermanentScrapeFailure(scrapeErr error) bool {
+	if scrapeErr == nil {
+		return false
+	}
+	msg := strings.ToLower(scrapeErr.Error())
+	return strings.Contains(msg, "redirected off-site to www.xnxx.gold")
 }
 
 func retryFailedScrapes() {
@@ -5297,6 +5554,7 @@ func retryFailedScrapes() {
 			log.Printf("Retry failed for %s (%s, attempt %d): %v", e.id, v.Source, e.count+1, err)
 			continue
 		}
+		clearScrapeFailure(e.id)
 		log.Printf("Retry succeeded for %s (%s)", refreshed.ID, refreshed.Source)
 	}
 }
