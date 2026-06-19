@@ -99,11 +99,47 @@ def run_ytdlp(url: str, timeout: int) -> dict[str, Any]:
     return json.loads(proc.stdout)
 
 
+def record_failure(conn: sqlite3.Connection, video_id: str, message: str) -> None:
+    cur = conn.execute("SELECT COALESCE(retry_count, 0) FROM scrape_failures WHERE video_id = ?", (video_id,)).fetchone()
+    retry_count = int(cur[0]) if cur else 0
+    next_count = retry_count + 1
+    delay = min(86400, 3600 * (2 ** min(next_count, 5)))
+    next_retry = int(time.time()) + delay
+    conn.execute(
+        """
+        INSERT INTO scrape_failures (video_id, retry_count, last_error, next_retry_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(video_id) DO UPDATE SET
+          retry_count = excluded.retry_count,
+          last_error = excluded.last_error,
+          next_retry_at = excluded.next_retry_at
+        """,
+        (video_id, next_count, message[:500], next_retry),
+    )
+    conn.commit()
+
+
+def prune_dead_unplayable(conn: sqlite3.Connection, video_id: str) -> None:
+    for table, col in (
+        ("favorites", "video_id"),
+        ("watch_history", "video_id"),
+        ("playlist_videos", "video_id"),
+        ("video_comments", "video_id"),
+        ("video_reactions", "video_id"),
+        ("video_watch_counts", "video_id"),
+        ("scrape_failures", "video_id"),
+        ("video_categories", "video_id"),
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (video_id,))
+    conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    conn.commit()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="/opt/karaxxx/karaxxx.db")
     ap.add_argument("--limit", type=int, default=250)
-    ap.add_argument("--source", choices=["eporner", "tnaflix", "drtuber", "all"], default="all")
+    ap.add_argument("--source", choices=["eporner", "tnaflix", "drtuber", "all"], default="all", help="all intentionally means eporner+tnaflix; drtuber yt-dlp extractor currently returns malformed data")
     ap.add_argument("--timeout", type=int, default=90)
     args = ap.parse_args()
 
@@ -114,21 +150,26 @@ def main() -> int:
 
     conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
-    source_filter = "AND source IN ('eporner','tnaflix','drtuber')"
+    source_filter = "AND source IN ('eporner','tnaflix')"
     params: list[Any] = []
+    if args.source == "drtuber":
+        print("DrTuber backfill is disabled: yt-dlp currently returns malformed extractor data for DrTuber.", flush=True)
+        return 0
     if args.source != "all":
         source_filter = "AND source = ?"
         params.append(args.source)
     rows = conn.execute(
         f"""
-        SELECT id, COALESCE(source,'') source, COALESCE(slug,'') slug, COALESCE(title,'') title
-        FROM videos
-        WHERE COALESCE(url_360,'') = ''
-          AND COALESCE(url_720,'') = ''
-          AND COALESCE(url_1080,'') = ''
-          AND COALESCE(hls_url,'') = ''
+        SELECT v.id, COALESCE(v.source,'') source, COALESCE(v.slug,'') slug, COALESCE(v.title,'') title
+        FROM videos v
+        LEFT JOIN scrape_failures f ON f.video_id = v.id
+        WHERE COALESCE(v.url_360,'') = ''
+          AND COALESCE(v.url_720,'') = ''
+          AND COALESCE(v.url_1080,'') = ''
+          AND COALESCE(v.hls_url,'') = ''
+          AND (f.video_id IS NULL OR f.next_retry_at <= strftime('%s','now'))
           {source_filter}
-        ORDER BY added_at DESC
+        ORDER BY COALESCE(f.retry_count, 0) ASC, v.added_at DESC
         LIMIT ?
         """,
         (*params, args.limit),
@@ -141,6 +182,7 @@ def main() -> int:
         url = build_url(row)
         if not url:
             skipped += 1
+            record_failure(conn, row.id, "no reconstructable URL for missing-media backfill")
             print(f"SKIP {row.source}:{row.id} no reconstructable URL", flush=True)
             continue
         try:
@@ -178,8 +220,16 @@ def main() -> int:
             print(f"OK {row.source}:{row.id} {url}", flush=True)
             time.sleep(3)
         except Exception as exc:  # noqa: BLE001 - admin script prints and continues
+            message = str(exc)
+            if "HTTP Error 404" in message:
+                prune_dead_unplayable(conn, row.id)
+                skipped += 1
+                print(f"PRUNE {row.source}:{row.id} dead detail page {url}: {message}", flush=True)
+                time.sleep(2)
+                continue
             fail += 1
-            print(f"FAIL {row.source}:{row.id} {url}: {exc}", flush=True)
+            record_failure(conn, row.id, message)
+            print(f"FAIL {row.source}:{row.id} {url}: {message}", flush=True)
             time.sleep(5)
     print(f"Done: ok={ok} fail={fail} skipped={skipped}")
     return 0 if fail == 0 else 1
