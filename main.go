@@ -20,6 +20,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"regexp"
 	"runtime"
@@ -62,6 +63,7 @@ var (
 	rateLimitDt   chan time.Time
 	rateLimitKVS  chan time.Time
 	refreshLocks  sync.Map
+	ytDLPMu       sync.Mutex
 	routeAPI      func(w http.ResponseWriter, r *http.Request)
 	startTime     = time.Now()
 	loginAttempts = make(map[string]*loginEntry)
@@ -2149,6 +2151,8 @@ func initRoutes() {
 				handleAPICrawlDt(w, r)
 			case r.URL.Path == "/api/crawl-kvs":
 				handleAPICrawlKVS(w, r)
+			case r.URL.Path == "/api/backfill-missing-media":
+				handleAPIBackfillMissingMedia(w, r)
 			case r.URL.Path == "/api/categories":
 				handleAPICategories(w, r)
 			case r.URL.Path == "/api/browse":
@@ -2237,6 +2241,7 @@ func initRoutes() {
 	http.HandleFunc("/api/crawl-tf", handleAPICrawlTf)
 	http.HandleFunc("/api/crawl-dt", handleAPICrawlDt)
 	http.HandleFunc("/api/crawl-kvs", handleAPICrawlKVS)
+	http.HandleFunc("/api/backfill-missing-media", handleAPIBackfillMissingMedia)
 	http.HandleFunc("/api/categories", handleAPICategories)
 	http.HandleFunc("/api/browse", handleAPIBrowse)
 	http.HandleFunc("/api/video/", handleAPIVideo)
@@ -2360,6 +2365,19 @@ func isPlayableSource(source string) bool {
 	default:
 		return isKVSSource(source)
 	}
+}
+
+func isYTDLPBackfillSource(source string) bool {
+	switch source {
+	case "eporner", "tnaflix", "drtuber":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMediaBackfillCapableSource(source string) bool {
+	return isPlayableSource(source) || isYTDLPBackfillSource(source)
 }
 
 func crawlLoop(ctx context.Context) {
@@ -3155,23 +3173,216 @@ func refreshLock(videoID string) func() {
 }
 
 func scrapeVideoDetailForSource(id, source string) (Video, error) {
+	var detail Video
+	var err error
 	switch source {
 	case "xvideos":
-		return scrapeXvVideoDetail(id)
+		detail, err = scrapeXvVideoDetail(id)
 	case "xhamster":
-		return scrapeXhVideoDetail(id)
+		detail, err = scrapeXhVideoDetail(id)
 	case "eporner":
-		return scrapeEpVideoDetail(id)
+		detail, err = scrapeEpVideoDetail(id)
 	case "tnaflix":
-		return scrapeTfVideoDetail(id)
+		detail, err = scrapeTfVideoDetail(id)
 	case "drtuber":
-		return scrapeDtVideoDetail(id)
+		detail, err = scrapeDtVideoDetail(id)
 	default:
 		if isKVSSource(source) {
-			return scrapeKVSVideoDetail(id, source)
+			detail, err = scrapeKVSVideoDetail(id, source)
+		} else {
+			detail, err = scrapeVideoDetail(id)
 		}
-		return scrapeVideoDetail(id)
 	}
+	if err != nil {
+		return detail, err
+	}
+	if !hasPlayableMedia(detail) && isYTDLPBackfillSource(source) {
+		base, ok := loadVideoFromDB(id)
+		if !ok {
+			base = detail
+		}
+		merged := mergeVideoForBackfill(base, detail)
+		if ytdlpDetail, ytdlpErr := scrapeVideoWithYTDLP(merged); ytdlpErr == nil && hasPlayableMedia(ytdlpDetail) {
+			return ytdlpDetail, nil
+		} else if ytdlpErr != nil {
+			log.Printf("yt-dlp media backfill failed for %s (%s): %v", id, source, ytdlpErr)
+		}
+	}
+	return detail, nil
+}
+
+func mergeVideoForBackfill(base, detail Video) Video {
+	if detail.ID == "" {
+		detail.ID = base.ID
+	}
+	if detail.Source == "" {
+		detail.Source = base.Source
+	}
+	if detail.Slug == "" {
+		detail.Slug = base.Slug
+	}
+	if detail.Title == "" {
+		detail.Title = base.Title
+	}
+	if detail.Description == "" {
+		detail.Description = base.Description
+	}
+	if len(detail.Categories) == 0 {
+		detail.Categories = base.Categories
+	}
+	if len(detail.Tags) == 0 {
+		detail.Tags = base.Tags
+	}
+	if detail.Uploader == "" {
+		detail.Uploader = base.Uploader
+	}
+	if detail.UploadDate == "" {
+		detail.UploadDate = base.UploadDate
+	}
+	if detail.Duration == 0 {
+		detail.Duration = base.Duration
+	}
+	if detail.Views == 0 {
+		detail.Views = base.Views
+	}
+	if detail.AddedAt == "" {
+		detail.AddedAt = base.AddedAt
+	}
+	if detail.ThumbUUID == "" {
+		detail.ThumbUUID = base.ThumbUUID
+	}
+	if detail.PreviewURL == "" {
+		detail.PreviewURL = base.PreviewURL
+	}
+	return detail
+}
+
+type ytDLPFormat struct {
+	FormatID string `json:"format_id"`
+	URL      string `json:"url"`
+	Ext      string `json:"ext"`
+	Height   int    `json:"height"`
+}
+
+type ytDLPInfo struct {
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Thumbnail string        `json:"thumbnail"`
+	Duration  int           `json:"duration"`
+	Formats   []ytDLPFormat `json:"formats"`
+}
+
+func buildVideoPageURL(v Video) string {
+	slug := strings.Trim(strings.TrimPrefix(v.Slug, "/"), " ")
+	switch v.Source {
+	case "eporner":
+		if slug != "" {
+			return epBase + "/video-" + v.ID + "/" + slug + "/"
+		}
+		return epBase + "/video-" + v.ID + "/"
+	case "tnaflix":
+		if slug != "" {
+			if strings.HasPrefix(slug, "http://") || strings.HasPrefix(slug, "https://") {
+				return slug
+			}
+			return tfBase + "/" + slug
+		}
+		return tfBase + "/video" + v.ID
+	case "drtuber":
+		if slug != "" {
+			return dtBase + "/video/" + v.ID + "/" + slug
+		}
+		return dtBase + "/video/" + v.ID
+	default:
+		return ""
+	}
+}
+
+func scrapeVideoWithYTDLP(v Video) (Video, error) {
+	if _, err := exec.LookPath("yt-dlp"); err != nil {
+		return v, fmt.Errorf("yt-dlp not installed: %w", err)
+	}
+	pageURL := buildVideoPageURL(v)
+	if pageURL == "" {
+		return v, fmt.Errorf("no yt-dlp URL builder for source %s", v.Source)
+	}
+	ytDLPMu.Lock()
+	defer func() {
+		time.Sleep(3 * time.Second)
+		ytDLPMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "yt-dlp", "-J", "--no-playlist", "--no-warnings", pageURL)
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return v, fmt.Errorf("yt-dlp timed out for %s", pageURL)
+	}
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return v, fmt.Errorf("yt-dlp failed for %s: %s", pageURL, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return v, err
+	}
+	var info ytDLPInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return v, fmt.Errorf("yt-dlp JSON parse failed: %w", err)
+	}
+	applyYTDLPInfo(&v, info)
+	if !hasPlayableMedia(v) {
+		return v, fmt.Errorf("yt-dlp returned no playable media")
+	}
+	return v, nil
+}
+
+func applyYTDLPInfo(v *Video, info ytDLPInfo) {
+	if info.Title != "" {
+		v.Title = info.Title
+	}
+	if info.Thumbnail != "" {
+		v.ThumbUUID = info.Thumbnail
+	}
+	if info.Duration > 0 {
+		v.Duration = info.Duration
+	}
+	for _, f := range info.Formats {
+		mediaURL := strings.TrimSpace(f.URL)
+		if mediaURL == "" || !(strings.HasPrefix(mediaURL, "http://") || strings.HasPrefix(mediaURL, "https://")) {
+			continue
+		}
+		ext := strings.ToLower(f.Ext)
+		if strings.Contains(mediaURL, ".m3u8") || ext == "m3u8" {
+			if v.HLSURL == "" {
+				v.HLSURL = mediaURL
+			}
+			continue
+		}
+		if ext != "" && ext != "mp4" && !strings.Contains(mediaURL, ".mp4") {
+			continue
+		}
+		height := f.Height
+		if height == 0 {
+			height = qualityFromURL(mediaURL)
+		}
+		switch {
+		case height >= 1080:
+			v.URL1080 = mediaURL
+		case height >= 720:
+			v.URL720 = mediaURL
+		case height > 0:
+			v.URL360 = mediaURL
+		case v.URL360 == "":
+			v.URL360 = mediaURL
+		}
+	}
+}
+
+func qualityFromURL(mediaURL string) int {
+	if m := regexp.MustCompile(`(?i)(?:^|[^0-9])(2160|1440|1080|720|480|360|240|144)p(?:[^0-9]|$)`).FindStringSubmatch(mediaURL); len(m) > 1 {
+		q, _ := strconv.Atoi(m[1])
+		return q
+	}
+	return 0
 }
 
 func loadVideoFromDB(id string) (Video, bool) {
@@ -5345,6 +5556,29 @@ func handleAPICrawlEp(w http.ResponseWriter, r *http.Request) {
 }
 
 func scrapeNewVideoDetails() {
+	scrapeMissingVideoDetails(backfillBatchSize)
+}
+
+func handleAPIBackfillMissingMedia(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	limit := 250
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	go scrapeMissingVideoDetails(limit)
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "started", "limit": limit})
+}
+
+func scrapeMissingVideoDetails(limit int) {
+	if limit <= 0 {
+		limit = backfillBatchSize
+	}
 	now := time.Now().Unix()
 	rows, err := db.Query(`SELECT v.id, COALESCE(v.source, 'xnxx')
 		FROM videos v
@@ -5357,7 +5591,7 @@ func scrapeNewVideoDetails() {
 		)
 		AND (f.video_id IS NULL OR f.next_retry_at <= ? OR f.retry_count >= ?)
 		ORDER BY COALESCE(f.retry_count, 0) ASC, v.added_at DESC
-		LIMIT ?`, now, maxScrapeFailuresBeforeDelete, backfillBatchSize)
+		LIMIT ?`, now, maxScrapeFailuresBeforeDelete, limit)
 	if err != nil {
 		log.Printf("Query for unscraped videos failed: %v", err)
 		return
@@ -5369,9 +5603,8 @@ func scrapeNewVideoDetails() {
 	for rows.Next() {
 		var id, source string
 		rows.Scan(&id, &source)
-		if !isPlayableSource(source) {
-			// Non-playable sources (eporner, drtuber, tnaflix) don't provide
-			// server-side media URLs. Skip retries to avoid infinite failure loop.
+		if !isMediaBackfillCapableSource(source) {
+			// Unknown sources are not eligible for server-side media backfill.
 			clearScrapeFailure(id)
 			continue
 		}

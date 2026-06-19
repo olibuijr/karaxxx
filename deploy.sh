@@ -181,6 +181,12 @@ push_release_files() {
   echo "  VERSION and CHANGELOG.md pushed"
 }
 
+ensure_remote_tools() {
+  echo "=== Ensuring remote scraper tools ==="
+  ssh "$SERVER" "if ! command -v yt-dlp >/dev/null 2>&1; then apt-get update && apt-get install -y yt-dlp; fi"
+  echo "  yt-dlp available on target"
+}
+
 push_all() {
   push_binary
   push_web
@@ -237,6 +243,7 @@ do_deploy() {
   bump_version "$ver"
   prepend_changelog_entry "$ver"
   verify_systemd_service
+  ensure_remote_tools
   stop_service
   push_all
   restart_service

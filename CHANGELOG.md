@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.13] — 2026-06-19
+
+### Changed
+- Serialize yt-dlp media backfill to avoid provider 429s while filling missing media.
+
+## [0.6.12] — 2026-06-19
+
+### Changed
+- Expose local/manual backfill endpoint in both route registration modes.
+
+## [0.6.11] — 2026-06-19
+
+### Changed
+- Add yt-dlp media backfill for EPorner/TNAFlix/DrTuber missing-media rows.
+- Store TNAFlix detail slugs from listing URLs and retry existing no-media rows during crawl.
+- Add manual /api/backfill-missing-media trigger and remote yt-dlp deployment preflight.
+
 ## [0.6.10] — 2026-06-19
 
 ### Changed

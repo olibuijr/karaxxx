@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -102,6 +103,13 @@ func scrapeTfListing(pageURL string) []Video {
 		seen[id] = true
 
 		v := Video{ID: id, Source: "tnaflix", AddedAt: time.Now().Format("2006-01-02")}
+		if strings.HasPrefix(pageURL, "http://") || strings.HasPrefix(pageURL, "https://") {
+			if u, err := url.Parse(pageURL); err == nil {
+				v.Slug = strings.TrimPrefix(u.Path, "/")
+			}
+		} else {
+			v.Slug = strings.TrimPrefix(pageURL, "/")
+		}
 
 		if catMatch := reTfCatURL.FindStringSubmatch(pageURL); len(catMatch) > 1 {
 			v.Categories = []string{strings.ReplaceAll(catMatch[1], "-", " ")}
@@ -125,6 +133,9 @@ func scrapeTfVideoDetail(videoID string) (Video, error) {
 	v := Video{ID: videoID, Source: "tnaflix"}
 
 	url := tfBase + "/video" + videoID
+	if existing, ok := loadVideoFromDB(videoID); ok && existing.Slug != "" {
+		url = buildVideoPageURL(existing)
+	}
 	resp, err := httpGetTfWithRetry(url)
 	if err != nil {
 		return v, err
@@ -261,15 +272,14 @@ func runTfCrawl() {
 				}
 				seen[v.ID] = true
 
-				var exists string
-				db.QueryRow("SELECT id FROM videos WHERE id = ?", v.ID).Scan(&exists)
-				if exists != "" {
+				var existingID string
+				var existingPlayable int
+				db.QueryRow(`SELECT id, CASE WHEN COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '' THEN 1 ELSE 0 END FROM videos WHERE id = ?`, v.ID).Scan(&existingID, &existingPlayable)
+				if existingID != "" && existingPlayable == 1 {
 					continue
 				}
 
-				cats := strings.Join(v.Categories, ",")
-				db.Exec(`INSERT OR IGNORE INTO videos (id, slug, title, categories, duration, source, thumb_uuid, added_at) VALUES (?,?,?,?,?,?,?,?)`,
-					v.ID, "", v.Title, cats, v.Duration, "tnaflix", v.ThumbUUID, v.AddedAt)
+				storeVideo(v)
 
 				detail, err := scrapeTfVideoDetail(v.ID)
 				if err != nil {
