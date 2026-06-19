@@ -15,6 +15,8 @@ const BASE = '/api'
 // Optimistic prefetch: the login screen warms the first browse page while
 // the auth round-trip is in flight, so the app shell paints with data instantly.
 let browsePrefetch: Promise<BrowseResponse | null> | null = null
+const categoriesPrefetch = new Map<number, Promise<string[]>>()
+const tagsPrefetch = new Map<number, Promise<{name: string, count: number}[]>>()
 
 export function prefetchBrowse(): void {
   if (browsePrefetch) return
@@ -49,10 +51,22 @@ export async function fetchVideo(id: string): Promise<Video> {
   return res.json() as Promise<Video>
 }
 
-export async function fetchCategories(): Promise<string[]> {
-  const res = await fetch(`${BASE}/categories`)
-  if (!res.ok) throw new Error(`Categories failed: ${res.status}`)
-  return res.json() as Promise<string[]>
+export async function fetchCategories(limit: number = 80): Promise<string[]> {
+  const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(160, Math.floor(limit))) : 80
+  const cached = categoriesPrefetch.get(normalizedLimit)
+  if (cached) return cached
+
+  const request = fetch(`${BASE}/categories?limit=${normalizedLimit}`)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Categories failed: ${res.status}`)
+      return res.json() as Promise<string[]>
+    })
+    .catch((err) => {
+      categoriesPrefetch.delete(normalizedLimit)
+      throw err
+    })
+  categoriesPrefetch.set(normalizedLimit, request)
+  return request
 }
 
 export async function fetchSearchSuggest(q: string, signal?: AbortSignal): Promise<SearchSuggestResponse> {
@@ -143,9 +157,18 @@ export async function fetchRandom(source?: string, cat?: string): Promise<string
 }
 
 export async function fetchTags(limit: number = 50): Promise<{name: string, count: number}[]> {
-  const res = await fetch(`${BASE}/tags?limit=${limit}`)
-  if (!res.ok) return []
-  return res.json()
+  const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50
+  const cached = tagsPrefetch.get(normalizedLimit)
+  if (cached) return cached
+
+  const request = fetch(`${BASE}/tags?limit=${normalizedLimit}`)
+    .then((res) => res.ok ? res.json() : [])
+    .catch(() => {
+      tagsPrefetch.delete(normalizedLimit)
+      return []
+    })
+  tagsPrefetch.set(normalizedLimit, request)
+  return request
 }
 
 export async function fetchPlaylists(token: string): Promise<any[]> {

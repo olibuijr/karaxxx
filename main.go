@@ -144,6 +144,8 @@ const (
 	maxFailuresPerBatch           = 20
 	maxScrapeFailuresBeforeDelete = 8
 	maxProxyBytes                 = 2 << 30
+	defaultCategoryLimit          = 80
+	maxCategoryLimit              = 160
 	playableMediaSQL              = "(COALESCE(url_360,'') <> '' OR COALESCE(url_720,'') <> '' OR COALESCE(url_1080,'') <> '' OR COALESCE(hls_url,'') <> '')"
 	playableMediaSQLV             = "(COALESCE(v.url_360,'') <> '' OR COALESCE(v.url_720,'') <> '' OR COALESCE(v.url_1080,'') <> '' OR COALESCE(v.hls_url,'') <> '')"
 	playableSources               = "xnxx,xhamster,xvideos,heavyfetish,punishbang,sunporno" // sources that provide playable media URLs via server-side scraping
@@ -477,6 +479,7 @@ func initDB() {
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_expires ON videos(expires_at)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_source ON videos(source)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_uploader ON videos(uploader)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_videos_playable_added ON videos(added_at DESC) WHERE ` + playableMediaSQL + `)`)
 
 	var colCount int
 	db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('videos') WHERE name='categories'").Scan(&colCount)
@@ -2714,7 +2717,16 @@ func refreshCatCache() {
 	if time.Since(catCache.last) < 30*time.Second {
 		return
 	}
-	rows, err := db.Query(`SELECT vc.category FROM video_categories vc JOIN videos v ON v.id = vc.video_id WHERE ` + playableMediaSQLV + ` GROUP BY vc.category ORDER BY COUNT(*) DESC`)
+	// Start from the much smaller playable-video id set, then use the
+	// video_categories primary key (video_id, category). The previous direct
+	// join made SQLite scan/group the whole category index and took ~25s on the
+	// production DB, blocking first sidebar load after restart.
+	rows, err := db.Query(`SELECT vc.category
+		FROM video_categories vc
+		WHERE vc.video_id IN (SELECT id FROM videos WHERE `+playableMediaSQL+`)
+		GROUP BY vc.category
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`, maxCategoryLimit)
 	if err != nil {
 		return
 	}
@@ -2735,6 +2747,19 @@ func refreshCatCache() {
 
 func handleAPICategories(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	limit := defaultCategoryLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			switch {
+			case parsed <= 0:
+				limit = defaultCategoryLimit
+			case parsed > maxCategoryLimit:
+				limit = maxCategoryLimit
+			default:
+				limit = parsed
+			}
+		}
+	}
 	catCache.mu.RLock()
 	cats := catCache.cats
 	catCache.mu.RUnlock()
@@ -2746,6 +2771,9 @@ func handleAPICategories(w http.ResponseWriter, r *http.Request) {
 	}
 	if cats == nil {
 		cats = []string{}
+	}
+	if len(cats) > limit {
+		cats = cats[:limit]
 	}
 	json.NewEncoder(w).Encode(cats)
 }

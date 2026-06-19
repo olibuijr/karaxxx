@@ -149,7 +149,7 @@ export default function Browse() {
   }, [hasSourceParam, sourceParam])
 
   useEffect(() => {
-    fetchCategories()
+    fetchCategories(80)
       .then((categories) => {
         setCategoryOptions([
           { label: 'All categories', value: '' },

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { fetchCategories, fetchTags } from '../api'
 import type { TagCount, Video } from '../types'
@@ -13,6 +13,7 @@ import { parseCategories, toggleCategoryParam } from '../lib/categories'
 type Sort = 'recent' | 'new' | 'views' | 'duration'
 
 const SORT_VALUES: Sort[] = ['recent', 'new', 'views', 'duration']
+const INITIAL_CATEGORY_COUNT = 24
 
 function readStoredPreference(key: string): string | null {
   if (typeof window === 'undefined') return null
@@ -36,6 +37,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const [cats, setCats] = useState<string[]>([])
   const [pinnedCats, setPinnedCats] = useState<string[]>([])
   const [catsOpen, setCatsOpen] = useState(() => localStorage.getItem('kxxx_cats_open') !== 'false')
+  const [catsExpanded, setCatsExpanded] = useState(false)
   const [tags, setTags] = useState<TagCount[]>([])
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [sp] = useSearchParams()
@@ -64,8 +66,8 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    fetchCategories().then(setCats).catch(() => {})
-    fetchTags(50).then(setTags).catch(() => {})
+    fetchCategories(80).then(setCats).catch(() => {})
+    fetchTags(24).then(setTags).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -161,8 +163,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     { label: 'Longest', value: 'duration' },
   ]
 
-  const pinnedSet = new Set(pinnedCats)
-  const unpinnedCats = cats.filter(c => !pinnedSet.has(c))
+  const pinnedSet = useMemo(() => new Set(pinnedCats), [pinnedCats])
+  const unpinnedCats = useMemo(() => cats.filter(c => !pinnedSet.has(c)), [cats, pinnedSet])
+  const visibleCats = catsExpanded ? unpinnedCats : unpinnedCats.slice(0, INITIAL_CATEGORY_COUNT)
+  const hiddenCatCount = Math.max(0, unpinnedCats.length - visibleCats.length)
 
   const catLink = (c: string, isPinned: boolean) => (
     <Link viewTransition
@@ -324,7 +328,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
           className="w-full flex items-center justify-between text-[11px] font-semibold text-muted uppercase tracking-widest mb-2 px-1 hover:text-text transition-colors"
           aria-label={catsOpen ? 'Collapse categories' : 'Expand categories'}
         >
-          Categories
+          <span>Categories</span>
+          <span className="ml-auto mr-2 rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] text-muted/80">
+            {unpinnedCats.length}
+          </span>
           <svg className={`w-3 h-3 text-muted transition-transform ${catsOpen ? 'rotate-180' : ''}`}
             viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="6 9 12 15 18 9" />
@@ -349,7 +356,23 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
             {pinnedCats.filter(c => cats.includes(c)).length > 0 && unpinnedCats.length === 0 && (
               <span className="px-3 py-1 text-[11px] text-muted">—</span>
             )}
-            {unpinnedCats.map(c => catLink(c, false))}
+            {visibleCats.map(c => catLink(c, false))}
+            {hiddenCatCount > 0 && (
+              <button
+                onClick={() => setCatsExpanded(true)}
+                className="mt-1 px-3 py-1.5 rounded-md text-left text-xs font-medium text-muted hover:text-text hover:bg-white/5 transition-colors"
+              >
+                Show {hiddenCatCount} more
+              </button>
+            )}
+            {catsExpanded && unpinnedCats.length > INITIAL_CATEGORY_COUNT && (
+              <button
+                onClick={() => setCatsExpanded(false)}
+                className="mt-1 px-3 py-1.5 rounded-md text-left text-xs font-medium text-muted hover:text-text hover:bg-white/5 transition-colors"
+              >
+                Show fewer categories
+              </button>
+            )}
           </div>
         )}
       </div>

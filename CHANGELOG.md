@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.15] — 2026-06-19
+
+### Changed
+- Optimize category/sidebar loading: rewrite category cache query to avoid 25s full join scan, add a partial playable-video index for fast browse counts, cap category API payloads, cache category/tag requests client-side, and collapse sidebar categories behind Show more.
+- Reduce sidebar tag/category bloat while preserving pinned categories and browse filters.
+
+## [0.6.14] — 2026-06-19
+
+### Changed
+- Optimize category/sidebar loading: rewrite category cache query to avoid 25s full join scan, cap category API payloads, cache category/tag requests client-side, and collapse sidebar categories behind Show more.
+- Reduce sidebar tag/category bloat while preserving pinned categories and browse filters.
+
 ## [0.6.13] — 2026-06-19
 
 ### Changed
